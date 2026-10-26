@@ -121,7 +121,11 @@ export class DeviceService extends Context.Service<
       hostId: DeviceHostId;
       deviceId: DeviceId;
     }) => Effect.Effect<
-      { readonly agentDeviceId: string; readonly args: ReadonlyArray<string> },
+      {
+        readonly agentDeviceId: string;
+        readonly session: string;
+        readonly args: ReadonlyArray<string>;
+      },
       DeviceError
     >;
     readonly state: Effect.Effect<DeviceServiceState>;
@@ -875,7 +879,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
           input.hostId,
           input.deviceId,
         ).pipe(Effect.provideService(Crypto.Crypto, crypto));
-        return { agentDeviceId, args: ["--config", configPath, "--session", session] };
+        return { agentDeviceId, session, args: ["--config", configPath, "--session", session] };
       }),
       state: SynchronizedRef.get(stateRef).pipe(Effect.map(({ state }) => state)),
       subscribe: PubSub.subscribe(statePubSub),

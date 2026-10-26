@@ -26,6 +26,16 @@ describe("device tool helpers", () => {
     expect(text).not.toContain("is on PATH");
   });
 
+  it("shows a bound launcher's commands without flags and keeps device actions off simctl and ssh", () => {
+    const command = "/state/device/targets/t3-a/agent-device";
+    const text = agentDeviceQuickStart(device, [], command);
+    const examples = text.split("\n").filter((line) => line.trimStart().startsWith(command));
+    expect(examples).toContain(`  ${command} snapshot -i  # accessibility tree with @eN refs`);
+    expect(examples.join("\n")).not.toMatch(/--(?:platform|udid|serial|config|session)\b/);
+    expect(text).not.toContain("remain available");
+    expect(text).toContain("Do not use simctl, idb, adb or ssh for those actions.");
+  });
+
   it("reads PNG dimensions from the IHDR chunk", () => {
     const png = new Uint8Array(24);
     new DataView(png.buffer).setUint32(0, 0x89504e47);

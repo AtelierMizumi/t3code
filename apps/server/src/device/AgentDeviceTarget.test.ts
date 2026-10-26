@@ -7,7 +7,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import { ensureAgentDeviceShim } from "./AgentDeviceShim.ts";
+import { bindAgentDeviceLauncher, ensureAgentDeviceShim } from "./AgentDeviceShim.ts";
 import {
   agentDeviceConfigPath,
   agentDeviceSession,
@@ -65,6 +65,98 @@ exec '${process.execPath.replaceAll("'", "'\"'\"'")}' "$@"
           ).rejects.toMatchObject({ code: 23, stdout: `${JSON.stringify(args)}\n`, stderr: "" }),
         );
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("binds one device's flags into its launcher and leaves help alone", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-device-bound-" });
+      const entryPath = path.join(dir, "cli.mjs");
+      yield* fs.writeFileString(entryPath, "console.log(JSON.stringify(process.argv.slice(2)));");
+      const target = [
+        "--platform",
+        "ios",
+        "--udid",
+        "UDID-1",
+        "--config",
+        "/h.json",
+        "--session",
+        "t3-a",
+      ];
+      const command = yield* bindAgentDeviceLauncher({
+        entryPath,
+        stateDir: dir,
+        session: "t3-a",
+        targetArgs: target,
+      });
+      const shared = yield* ensureAgentDeviceShim({ entryPath, stateDir: dir });
+      const launch = (launcher: string, args: ReadonlyArray<string>) =>
+        exec(process.execPath, [path.join(launcher, "agent-device-launcher.mjs"), ...args]).then(
+          (result) => JSON.parse(result.stdout),
+        );
+      const bound = path.dirname(command);
+      expect(yield* Effect.promise(() => launch(bound, ["snapshot", "-i"]))).toEqual([
+        "snapshot",
+        "-i",
+        ...target,
+      ]);
+      // A flag the agent passes itself wins over the bound one.
+      expect(yield* Effect.promise(() => launch(bound, ["open", "--session", "mine"]))).toEqual([
+        "open",
+        "--session",
+        "mine",
+        "--platform",
+        "ios",
+        "--udid",
+        "UDID-1",
+        "--config",
+        "/h.json",
+      ]);
+      for (const args of [["help", "gesture"], ["open", "--help"], ["record", "-h"], []]) {
+        expect(yield* Effect.promise(() => launch(bound, args))).toEqual(args);
+        expect(yield* Effect.promise(() => launch(shared, args))).toEqual(args);
+      }
+      yield* fs.remove(entryPath);
+      yield* Effect.promise(() =>
+        expect(launch(bound, ["snapshot"])).rejects.toThrow("Call device_open again"),
+      );
+    }).pipe(
+      Effect.scoped,
+      Effect.provideService(HostProcess.IsExecutable, false),
+      Effect.provideService(HostProcess.ExecutablePath, process.execPath),
+      Effect.provide(NodeServices.layer),
+    ),
+  );
+
+  it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "tells the agent to reopen the device when the runtime it was bound to is gone",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const dir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-device-stale-" });
+        const runtime = path.join(dir, "old-node");
+        yield* fs.writeFileString(runtime, "#!/bin/sh\nexit 0\n");
+        yield* fs.chmod(runtime, 0o755);
+        const command = yield* bindAgentDeviceLauncher({
+          entryPath: path.join(dir, "cli.mjs"),
+          stateDir: dir,
+          session: "t3-a",
+          targetArgs: ["--config", "/h.json", "--session", "t3-a"],
+        }).pipe(Effect.provideService(HostProcess.ExecutablePath, runtime));
+        yield* fs.remove(runtime);
+        yield* Effect.promise(() =>
+          expect(exec(command, ["snapshot"])).rejects.toMatchObject({
+            code: 1,
+            stderr: expect.stringContaining("Call device_open again"),
+          }),
+        );
+      }).pipe(
+        Effect.scoped,
+        Effect.provideService(HostProcess.IsExecutable, false),
+        Effect.provide(NodeServices.layer),
+      ),
   );
 
   it.effect("runs two hosts concurrently and only updates the reconnected host", () =>

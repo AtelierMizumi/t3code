@@ -10,10 +10,8 @@ import {
   LOCAL_DEVICE_HOST_ID,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import * as Path from "effect/Path";
-import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as ServerConfig from "../../../config.ts";
-import { ensureAgentDeviceShim } from "../../../device/AgentDeviceShim.ts";
+import { bindAgentDeviceLauncher, ensureAgentDeviceShim } from "../../../device/AgentDeviceShim.ts";
 import { nodeRuntimeUnavailableMessage } from "@t3tools/shared/nodeRuntime";
 
 import * as DeviceService from "../../../device/DeviceService.ts";
@@ -28,20 +26,19 @@ function agentDeviceTargetArgs(device: DeviceSummary): ReadonlyArray<string> {
     : ["--platform", "android", "--serial", device.id];
 }
 
+const shellWord = (value: string) =>
+  /^[a-zA-Z0-9_./:-]+$/.test(value) ? value : "'" + value.replaceAll("'", "'\"'\"'") + "'";
+
+/** `targetArgs` are the flags the command still needs; a bound launcher needs none. */
 export function agentDeviceQuickStart(
   device: DeviceSummary,
   targetArgs = agentDeviceTargetArgs(device),
   command = "agent-device",
   cloud = false,
 ): string {
-  const executable = /^[a-zA-Z0-9_./:-]+$/.test(command)
-    ? command
-    : "'" + command.replaceAll("'", "'\"'\"'") + "'";
-  const target = targetArgs
-    .map((arg) =>
-      /^[a-zA-Z0-9_./:-]+$/.test(arg) ? arg : "'" + arg.replaceAll("'", "'\"'\"'") + "'",
-    )
-    .join(" ");
+  const executable = shellWord(command);
+  const target = targetArgs.map(shellWord).join(" ");
+  const run = (args: string) => [executable, args, target].filter(Boolean).join(" ");
   const platformNotes = cloud
     ? "This is an EAS Simulator session in the cloud. It bills the Expo account per minute until it stops, so call device_close with shutdown: true when you are done. It starts with no apps installed: install-from-source <url> installs a build from a URL (iOS needs a .tar.gz containing a .app), and install uploads one from this machine."
     : device.platform === "ios"
@@ -49,18 +46,23 @@ export function agentDeviceQuickStart(
       : "The Android snapshot helper installs itself on first use.";
   return [
     `The user is watching ${device.name} (${device.version}) in the Device panel.`,
-    `Drive it with ${executable}. Use this exact executable path; login shells may reset PATH. Always pass ${target}.`,
-    "Typical loop:",
-    `  ${executable} open <bundle-or-package-id> ${target}     # or: open <app> <deep-link-url>`,
-    `  ${executable} snapshot -i ${target}                     # accessibility tree with @eN refs`,
-    `  ${executable} click @e3 ${target}`,
-    `  ${executable} fill @e5 "text" ${target}`,
-    `  ${executable} screenshot /tmp/shot.png ${target}        # or call device_screenshot`,
-    `  ${executable} install <app> <path-to-.app-or-.apk> ${target}`,
-    `Prefer snapshot refs over coordinates. Run ${executable} help for workflow guides and ${executable} <command> --help for flags.`,
-    "Prefer agent-device for driving this device. simctl, adb, and xcrun remain available for anything it does not cover.",
-    "For remote hosts, arrange builds, app installation, and any Metro reverse forwarding yourself. T3 provides discovery, streaming, and control only.",
-    "Keep the returned --config and --session flags on every command. Other hosts can be used concurrently; opening one does not switch these commands.",
+    target === ""
+      ? `Drive it with ${executable}. It is bound to this device and session, so pass no --platform, --udid, --serial, --config or --session flags. Use this exact path; login shells may reset PATH.`
+      : `Drive it with ${executable}. Use this exact path; login shells may reset PATH. Always pass ${target}.`,
+    "Every app launch, deep link, tap, text entry, alert, setting, screenshot and recording on this device goes through it:",
+    `  ${run("open <bundle-or-package-id> --relaunch")}  # restarts the app; Expo dev clients connect to their Metro, --metro-port <port> picks it`,
+    `  ${run("open <bundle-or-package-id> <deep-link-url>")}`,
+    `  ${run("snapshot -i")}  # accessibility tree with @eN refs`,
+    `  ${run("press @e3 --settle")}`,
+    `  ${run('fill @e5 "text" --settle')}`,
+    `  ${run("alert accept")}`,
+    `  ${run("settings appearance dark")}  # also text-size, permission grant <name>`,
+    `  ${run("screenshot /tmp/shot.png")}  # or call device_screenshot to look`,
+    `  ${run("record start /tmp/run.mp4")}  # then record stop`,
+    `  ${run("install <app> <path-to-.app-or-.apk>")}`,
+    `Prefer snapshot refs over coordinates. Run ${executable} help <command> for flags and ${executable} help workflow for guides.`,
+    "Do not use simctl, idb, adb or ssh for those actions. They stay fine for builds, installs, code sync, Metro, port forwards, logs, test runners and what this command cannot do; come back to it for every UI action and screenshot so the user can watch.",
+    "Each device_open returns its own command; opening another device does not retarget this one.",
     platformNotes,
   ].join("\n");
 }
@@ -244,17 +246,21 @@ const handlers = {
         deviceId: device.id,
       });
       const cloud = after.hosts.some((host) => host.id === device.hostId && host.kind === "eas");
-      const targetArgs = [
-        ...agentDeviceTargetArgs({ ...device, id: agent.agentDeviceId }),
-        ...agent.args,
-      ];
       const config = yield* ServerConfig.ServerConfig;
-      const path = yield* Path.Path;
-      const platform = yield* HostProcess.Platform;
-      const shimDir = yield* ensureAgentDeviceShim({
-        entryPath: yield* devices.agentCli,
-        stateDir: config.stateDir,
-      }).pipe(
+      const entryPath = yield* devices.agentCli;
+      // The unbound launcher stays current for agents that still call it with flags.
+      const command = yield* ensureAgentDeviceShim({ entryPath, stateDir: config.stateDir }).pipe(
+        Effect.andThen(
+          bindAgentDeviceLauncher({
+            entryPath,
+            stateDir: config.stateDir,
+            session: agent.session,
+            targetArgs: [
+              ...agentDeviceTargetArgs({ ...device, id: agent.agentDeviceId }),
+              ...agent.args,
+            ],
+          }),
+        ),
         Effect.mapError(
           (error) =>
             new DeviceToolUnavailableError({
@@ -266,14 +272,10 @@ const handlers = {
             }),
         ),
       );
-      const command = path.join(
-        shimDir,
-        platform === "win32" ? "agent-device.cmd" : "agent-device",
-      );
       return {
         device,
-        agentDevice: { command, targetArgs },
-        quickStart: agentDeviceQuickStart(device, targetArgs, command, cloud),
+        agentDevice: { command, targetArgs: [] },
+        quickStart: agentDeviceQuickStart(device, [], command, cloud),
       };
     }).pipe(Effect.mapError(toolError)),
   ),

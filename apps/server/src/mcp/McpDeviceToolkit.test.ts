@@ -8,6 +8,8 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Layer from "effect/Layer";
 import { McpSchema, McpServer } from "effect/ai";
 
@@ -139,6 +141,7 @@ const layerDeviceServiceMock = Layer.mock(DeviceService.DeviceService)({
   agentTarget: () =>
     Effect.succeed({
       agentDeviceId: "SIM-UDID",
+      session: "thread-device",
       args: ["--config", "/host.json", "--session", "thread-device"],
     }),
 });
@@ -166,8 +169,25 @@ it.effect("registers the device tools and returns the screenshot as image conten
         .callTool({ name: "device_open", arguments: { platform: "ios" } })
         .pipe(callWith(["device"]), Effect.provideService(McpSchema.McpServerClient, client));
       expect(opened.isError).toBe(false);
-      const openedContent = opened.structuredContent as { quickStart: string };
-      expect(openedContent.quickStart).toContain("--udid SIM-UDID");
+      const openedContent = opened.structuredContent as {
+        agentDevice: { command: string; targetArgs: ReadonlyArray<string> };
+        quickStart: string;
+      };
+      expect(openedContent.agentDevice.targetArgs).toEqual([]);
+      expect(openedContent.quickStart).toContain(
+        `${openedContent.agentDevice.command} snapshot -i`,
+      );
+      // The launcher selects the device by agent-device's id for it, not T3's.
+      const launcher = yield* Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        return yield* fs.readFileString(
+          path.join(path.dirname(openedContent.agentDevice.command), "agent-device-launcher.mjs"),
+        );
+      }).pipe(Effect.provide(NodeServices.layer));
+      expect(launcher).toContain(
+        '"--udid","SIM-UDID","--config","/host.json","--session","thread-device"',
+      );
 
       const shot = yield* server
         .callTool({ name: "device_screenshot", arguments: { deviceId: "UDID-1" } })
@@ -318,6 +338,7 @@ describe("device targeting across hosts", () => {
       agentTarget: () =>
         Effect.succeed({
           agentDeviceId: "MAC-UDID",
+          session: "thread-device",
           args: ["--config", "/mac.json", "--session", "thread-device"],
         }),
     });

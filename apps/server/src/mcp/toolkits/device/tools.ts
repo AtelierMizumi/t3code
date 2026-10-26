@@ -49,7 +49,7 @@ const DeviceListTool = Tool.make("device_list", {
 
 const DeviceOpenTool = Tool.make("device_open", {
   description:
-    "Open a simulator or emulator for this thread. Boots it if needed and shows it in the user's Device panel. Returns the `agent-device` CLI call pinned to that device. Drive the device with that CLI.",
+    "Open a simulator or emulator, on this machine or a device host, for this thread. Boots it if needed and shows it in the user's Device panel. Returns an `agent-device` command bound to that device: run it with no device flags for every app launch, tap, text entry, screenshot and recording, instead of simctl, idb, adb or ssh.",
   parameters: DeviceToolOpenInput,
   success: DeviceToolOpenResult,
   failure: DeviceToolFailure,
