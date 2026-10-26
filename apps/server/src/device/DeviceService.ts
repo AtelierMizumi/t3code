@@ -263,6 +263,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
     }),
   );
 
+  // Uninterruptible so a committed retirement always prunes, even if its caller is cancelled.
   const publish = (update: (state: DeviceServiceState) => DeviceServiceState) =>
     SynchronizedRef.modifyEffect(stateRef, ({ state }) => {
       const next = { ...update(state), revision: state.revision + 1 };
@@ -273,6 +274,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
     }).pipe(
       Effect.tap(({ retired }) => (retired ? pruneLaunchers : Effect.void)),
       Effect.map(({ next }) => next),
+      Effect.uninterruptible,
     );
 
   const resolveHost = Effect.fn("DeviceService.resolveHost")(function* (

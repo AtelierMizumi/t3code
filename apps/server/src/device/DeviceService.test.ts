@@ -20,6 +20,7 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -683,6 +684,8 @@ it.effect.each(["shutdown", "close"] as const)(
         stop: Effect.void,
       };
       const launchers = new Set(["t3-from-a-previous-run"]);
+      let pauseBind: { entered: Deferred.Deferred<void>; proceed: Deferred.Deferred<void> } | null =
+        null;
       const service = yield* DeviceService.makeWithHosts(
         new Map([[host.id, host]]),
         undefined,
@@ -690,7 +693,11 @@ it.effect.each(["shutdown", "close"] as const)(
         undefined,
         {
           bind: ({ session }) =>
-            Effect.sync(() => {
+            Effect.gen(function* () {
+              if (pauseBind) {
+                yield* Deferred.succeed(pauseBind.entered, undefined);
+                yield* Deferred.await(pauseBind.proceed);
+              }
               launchers.add(session);
               return session;
             }),
@@ -734,6 +741,24 @@ it.effect.each(["shutdown", "close"] as const)(
       yield* service.close({ threadId: other.threadId });
       expect(launchers).toEqual(new Set([session]));
       expect(otherSession).not.toBe(session);
+      // A caller interrupted after retirement committed, while a bind holds the launcher lock.
+      pauseBind = { entered: yield* Deferred.make<void>(), proceed: yield* Deferred.make<void>() };
+      const binding = yield* Effect.forkChild(
+        service.agentLauncher({ ...target(threadId), targetArgs: [] }),
+      );
+      yield* Deferred.await(pauseBind.entered);
+      const updates = yield* service.subscribe;
+      const retiring = yield* Effect.forkChild(
+        operation === "shutdown" ? service.shutdown(input) : service.close({ threadId }),
+      );
+      expect((yield* PubSub.take(updates)).sessions).toEqual([]);
+      // list writes through the same state lock, so the retirement has committed.
+      expect((yield* service.list).sessions).toEqual([]);
+      yield* Effect.sync(() => retiring.interruptUnsafe());
+      yield* Deferred.succeed(pauseBind.proceed, undefined);
+      yield* Fiber.join(binding);
+      yield* Fiber.await(retiring);
+      expect(launchers).toEqual(new Set());
     }).pipe(Effect.provide(ServerSettings.layerTest({ enableDeviceSupport: true })), Effect.scoped),
 );
 
