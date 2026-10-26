@@ -109,18 +109,27 @@ const orchestrationInstructions = (hasDeviceTools: boolean) =>
     ? `${T3_CODE_ORCHESTRATION_INSTRUCTIONS}\n${T3_CODE_DEVICE_TOOL_INSTRUCTIONS}\n`
     : T3_CODE_ORCHESTRATION_INSTRUCTIONS;
 
-function prependT3OrchestrationInstructions(prompt: string, hasDeviceTools: boolean): string {
-  return `<t3_code_orchestration_instructions>${orchestrationInstructions(hasDeviceTools).trim()}</t3_code_orchestration_instructions>\n\n<user_request>\n${prompt}\n</user_request>`;
+function prependT3OrchestrationInstructions(prompt: string, instructions: string): string {
+  return `<t3_code_orchestration_instructions>${instructions.trim()}</t3_code_orchestration_instructions>\n\n<user_request>\n${prompt}\n</user_request>`;
 }
 
-export function t3OrchestrationPromptForFirstRun(input: {
+/** For providers whose instructions ride on the prompt, so a compacted conversation loses them. */
+export function t3OrchestrationPrompt(input: {
   readonly prompt: string;
-  readonly runOrdinal: number;
   readonly hasT3Mcp: boolean;
   readonly hasDeviceTools: boolean;
+  readonly orchestrationDelivered: boolean;
+  readonly deviceInstructionsDelivered: boolean;
 }): string {
-  return input.runOrdinal === 1 && input.hasT3Mcp
-    ? prependT3OrchestrationInstructions(input.prompt, input.hasDeviceTools)
+  if (!input.hasT3Mcp) return input.prompt;
+  if (!input.orchestrationDelivered) {
+    return prependT3OrchestrationInstructions(
+      input.prompt,
+      orchestrationInstructions(input.hasDeviceTools),
+    );
+  }
+  return input.hasDeviceTools && !input.deviceInstructionsDelivered
+    ? prependT3OrchestrationInstructions(input.prompt, T3_CODE_DEVICE_TOOL_INSTRUCTIONS)
     : input.prompt;
 }
 

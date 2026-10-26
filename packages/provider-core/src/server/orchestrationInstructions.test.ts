@@ -3,8 +3,9 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   T3_CODE_DEVICE_TOOL_INSTRUCTIONS,
   T3_CODE_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH,
+  T3_CODE_ORCHESTRATION_INSTRUCTIONS,
   t3AcpPromptWithInstructions,
-  t3OrchestrationPromptForFirstRun,
+  t3OrchestrationPrompt,
   t3OrchestrationSystemPrompt,
 } from "./orchestrationInstructions.ts";
 
@@ -29,14 +30,27 @@ describe("T3 device instructions", () => {
     assert.isUndefined(t3OrchestrationSystemPrompt(false, true));
 
     const firstRun = (hasDeviceTools: boolean) =>
-      t3OrchestrationPromptForFirstRun({
+      t3OrchestrationPrompt({
         prompt: "Check the login screen.",
-        runOrdinal: 1,
         hasT3Mcp: true,
         hasDeviceTools,
+        orchestrationDelivered: false,
+        deviceInstructionsDelivered: false,
       });
     assert.include(firstRun(true), T3_CODE_DEVICE_TOOL_INSTRUCTIONS);
     assert.notInclude(firstRun(false), "## T3 Code devices");
+
+    const laterRun = (deviceInstructionsDelivered: boolean) =>
+      t3OrchestrationPrompt({
+        prompt: "Check the login screen.",
+        hasT3Mcp: true,
+        hasDeviceTools: true,
+        orchestrationDelivered: true,
+        deviceInstructionsDelivered,
+      });
+    assert.include(laterRun(false), T3_CODE_DEVICE_TOOL_INSTRUCTIONS);
+    assert.notInclude(laterRun(false), T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim());
+    assert.equal(laterRun(true), "Check the login screen.");
   });
 
   it("reach ACP agents again when device access changes mid-thread", () => {
