@@ -97,3 +97,19 @@ export const bindAgentDeviceLauncher = Effect.fn("AgentDeviceShim.bind")(functio
     boundArgs: input.targetArgs,
   });
 });
+
+/** Removes the bound launchers of agent-device sessions not in `live`. */
+export const pruneAgentDeviceLaunchers = Effect.fn("AgentDeviceShim.prune")(function* (input: {
+  readonly stateDir: string;
+  readonly live: ReadonlySet<string>;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const dir = path.join(input.stateDir, TARGETS_DIR);
+  const sessions = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => []));
+  yield* Effect.forEach(
+    sessions.filter((session) => !input.live.has(session)),
+    (session) => fs.remove(path.join(dir, session), { recursive: true, force: true }),
+    { discard: true },
+  ).pipe(Effect.ignore);
+});

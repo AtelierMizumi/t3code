@@ -33,6 +33,11 @@ import * as FileSystem from "effect/FileSystem";
 import { resolveNodeExecutable, nodeRuntimeUnavailableMessage } from "@t3tools/shared/nodeRuntime";
 import * as Path from "effect/Path";
 import { ensureAgentDevice, ensureDeviceHub } from "./DeviceToolchain.ts";
+import {
+  bindAgentDeviceLauncher,
+  ensureAgentDeviceShim,
+  pruneAgentDeviceLaunchers,
+} from "./AgentDeviceShim.ts";
 import * as ServerConfig from "../config.ts";
 import {
   agentDeviceConfigPath,
@@ -104,7 +109,6 @@ export interface DeviceAgentReadiness extends DeviceReadiness {
 export class DeviceService extends Context.Service<
   DeviceService,
   {
-    readonly agentCli: Effect.Effect<string, DeviceError>;
     readonly testHost: (
       config: SshDeviceHostConfig,
     ) => Effect.Effect<DeviceHostSummary, DeviceError>;
@@ -128,6 +132,11 @@ export class DeviceService extends Context.Service<
       },
       DeviceError
     >;
+    /** The command agents run for one agent-device session; it is removed when the session ends. */
+    readonly agentLauncher: (input: {
+      readonly session: string;
+      readonly targetArgs: ReadonlyArray<string>;
+    }) => Effect.Effect<string, DeviceError>;
     readonly state: Effect.Effect<DeviceServiceState>;
     readonly subscribe: Effect.Effect<PubSub.Subscription<DeviceServiceState>, never, Scope.Scope>;
     readonly configure: (
@@ -165,6 +174,12 @@ interface ServiceState {
   readonly state: DeviceServiceState;
 }
 
+export interface AgentDeviceLaunchers {
+  readonly bind: DeviceService["Service"]["agentLauncher"];
+  /** Removes every launcher whose session is not in `live`. */
+  readonly prune: (live: ReadonlySet<string>) => Effect.Effect<void>;
+}
+
 export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* (
   hosts: ReadonlyMap<DeviceHostId, DeviceHost.DeviceHost["Service"]>,
   testHost: DeviceService["Service"]["testHost"] = (host) =>
@@ -187,6 +202,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
       }),
     ),
   installTool?: (tool: "hub" | "agent") => Effect.Effect<unknown, DeviceError>,
+  launchers?: AgentDeviceLaunchers,
 ) {
   const settings = yield* ServerSettings.ServerSettingsService;
   const crypto = yield* Crypto.Crypto;
@@ -225,11 +241,30 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
     },
   });
 
+  const launcherLock = yield* Semaphore.make(1);
+  // Reads sessions under the lock, so a launcher bound after a prune began is never removed by it.
+  const pruneLaunchers = launcherLock.withPermit(
+    Effect.gen(function* () {
+      if (!launchers) return;
+      const { state } = yield* SynchronizedRef.get(stateRef);
+      const live = yield* Effect.forEach(state.sessions, (session) =>
+        agentDeviceSession(session.threadId, session.hostId, session.deviceId),
+      ).pipe(Effect.provideService(Crypto.Crypto, crypto));
+      yield* launchers.prune(new Set(live));
+    }),
+  );
+
   const publish = (update: (state: DeviceServiceState) => DeviceServiceState) =>
-    SynchronizedRef.updateAndGetEffect(stateRef, ({ state }) => {
+    SynchronizedRef.modifyEffect(stateRef, ({ state }) => {
       const next = { ...update(state), revision: state.revision + 1 };
-      return PubSub.publish(statePubSub, next).pipe(Effect.as({ state: next }));
-    }).pipe(Effect.map(({ state }) => state));
+      const retired = state.sessions.some((session) => !next.sessions.includes(session));
+      return PubSub.publish(statePubSub, next).pipe(
+        Effect.as([{ next, retired }, { state: next }] as const),
+      );
+    }).pipe(
+      Effect.tap(({ retired }) => (retired ? pruneLaunchers : Effect.void)),
+      Effect.map(({ next }) => next),
+    );
 
   const resolveHost = Effect.fn("DeviceService.resolveHost")(function* (
     hostId: DeviceHostId | undefined,
@@ -805,6 +840,9 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
       Effect.map(({ state }) => state.sessions.filter((session) => session.threadId === threadId)),
     );
 
+  // Sessions live in memory, so this removes every launcher a previous run left behind.
+  yield* pruneLaunchers;
+
   return {
     ...DeviceService.of({
       testHost,
@@ -831,12 +869,6 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
           }),
         );
       }),
-      agentCli: Effect.fail(
-        new DeviceHostUnavailableError({
-          hostId: LOCAL_DEVICE_HOST_ID,
-          reason: "Agent CLI installation is unavailable in this device service.",
-        }),
-      ),
       agentTarget: Effect.fn("DeviceService.agentTarget")(function* (input) {
         const host = yield* resolveHost(input.hostId);
         const ready = yield* agentReadinessIfSupported(input.hostId);
@@ -881,6 +913,15 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
         ).pipe(Effect.provideService(Crypto.Crypto, crypto));
         return { agentDeviceId, session, args: ["--config", configPath, "--session", session] };
       }),
+      agentLauncher: (input) =>
+        launchers
+          ? launcherLock.withPermit(launchers.bind(input))
+          : Effect.fail(
+              new DeviceHostUnavailableError({
+                hostId: LOCAL_DEVICE_HOST_ID,
+                reason: "Agent launchers are unavailable in this device service.",
+              }),
+            ),
       state: SynchronizedRef.get(stateRef).pipe(Effect.map(({ state }) => state)),
       subscribe: PubSub.subscribe(statePubSub),
       configure,
@@ -956,6 +997,64 @@ export const make = Effect.gen(function* () {
         }),
     ),
   );
+  const agentCli = resolveNodeExecutable("Device automation").pipe(
+    Effect.andThen(ensureAgentDevice(config.baseDir)),
+    Effect.provideService(FileSystem.FileSystem, fs),
+    Effect.provideService(Path.Path, path),
+    Effect.provideService(ProcessRunner.ProcessRunner, runner),
+    Effect.map((tool) => tool.entryPath),
+    Effect.mapError((error) =>
+      error._tag === "NodeRuntimeUnavailableError"
+        ? new DeviceHostUnavailableError({
+            hostId: LOCAL_DEVICE_HOST_ID,
+            hostLabel: LOCAL_DEVICE_HOST_LABEL,
+            reason: nodeRuntimeUnavailableMessage("Device automation"),
+            cause: error,
+          })
+        : new DeviceOperationError({
+            operation: "install agent CLI",
+            reason: "command_failed",
+            cause: error,
+          }),
+    ),
+  );
+  const launchers: AgentDeviceLaunchers = {
+    bind: Effect.fn("DeviceService.bindLauncher")(
+      function* (input) {
+        const entryPath = yield* agentCli;
+        // The unbound launcher stays current for agents that still call it with flags.
+        yield* ensureAgentDeviceShim({ entryPath, stateDir: config.stateDir });
+        return yield* bindAgentDeviceLauncher({ entryPath, stateDir: config.stateDir, ...input });
+      },
+      Effect.provideService(FileSystem.FileSystem, fs),
+      Effect.provideService(Path.Path, path),
+      Effect.catchTags({
+        NodeRuntimeUnavailableError: (cause) =>
+          Effect.fail(
+            new DeviceHostUnavailableError({
+              hostId: LOCAL_DEVICE_HOST_ID,
+              hostLabel: LOCAL_DEVICE_HOST_LABEL,
+              reason: nodeRuntimeUnavailableMessage("Device automation"),
+              cause,
+            }),
+          ),
+        PlatformError: (cause) =>
+          Effect.fail(
+            new DeviceHostUnavailableError({
+              hostId: LOCAL_DEVICE_HOST_ID,
+              hostLabel: LOCAL_DEVICE_HOST_LABEL,
+              reason: "Could not prepare the agent-device launcher.",
+              cause,
+            }),
+          ),
+      }),
+    ),
+    prune: (live) =>
+      pruneAgentDeviceLaunchers({ stateDir: config.stateDir, live }).pipe(
+        Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.provideService(Path.Path, path),
+      ),
+  };
   const probeContext =
     yield* Effect.context<Effect.Services<ReturnType<typeof SshDeviceHost.probe>>>();
   const localTargetContext =
@@ -995,6 +1094,7 @@ export const make = Effect.gen(function* () {
             }),
         ),
       ),
+    launchers,
   );
   const hostContext =
     yield* Effect.context<Effect.Services<ReturnType<typeof SshDeviceHost.make>>>();
@@ -1136,27 +1236,6 @@ export const make = Effect.gen(function* () {
   return {
     ...service,
     easAccount,
-    agentCli: resolveNodeExecutable("Device automation").pipe(
-      Effect.andThen(ensureAgentDevice(config.baseDir)),
-      Effect.provideService(FileSystem.FileSystem, fs),
-      Effect.provideService(Path.Path, path),
-      Effect.provideService(ProcessRunner.ProcessRunner, runner),
-      Effect.map((tool) => tool.entryPath),
-      Effect.mapError((error) =>
-        error._tag === "NodeRuntimeUnavailableError"
-          ? new DeviceHostUnavailableError({
-              hostId: LOCAL_DEVICE_HOST_ID,
-              hostLabel: LOCAL_DEVICE_HOST_LABEL,
-              reason: nodeRuntimeUnavailableMessage("Device automation"),
-              cause: error,
-            })
-          : new DeviceOperationError({
-              operation: "install agent CLI",
-              reason: "command_failed",
-              cause: error,
-            }),
-      ),
-    ),
   };
 });
 

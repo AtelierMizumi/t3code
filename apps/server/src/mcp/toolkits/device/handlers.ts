@@ -10,10 +10,6 @@ import {
   LOCAL_DEVICE_HOST_ID,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import * as ServerConfig from "../../../config.ts";
-import { bindAgentDeviceLauncher, ensureAgentDeviceShim } from "../../../device/AgentDeviceShim.ts";
-import { nodeRuntimeUnavailableMessage } from "@t3tools/shared/nodeRuntime";
-
 import * as DeviceService from "../../../device/DeviceService.ts";
 import { threadWorkspaceRoot } from "../../../project/threadWorkspaceRoot.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -246,32 +242,13 @@ const handlers = {
         deviceId: device.id,
       });
       const cloud = after.hosts.some((host) => host.id === device.hostId && host.kind === "eas");
-      const config = yield* ServerConfig.ServerConfig;
-      const entryPath = yield* devices.agentCli;
-      // The unbound launcher stays current for agents that still call it with flags.
-      const command = yield* ensureAgentDeviceShim({ entryPath, stateDir: config.stateDir }).pipe(
-        Effect.andThen(
-          bindAgentDeviceLauncher({
-            entryPath,
-            stateDir: config.stateDir,
-            session: agent.session,
-            targetArgs: [
-              ...agentDeviceTargetArgs({ ...device, id: agent.agentDeviceId }),
-              ...agent.args,
-            ],
-          }),
-        ),
-        Effect.mapError(
-          (error) =>
-            new DeviceToolUnavailableError({
-              reason:
-                error._tag === "NodeRuntimeUnavailableError"
-                  ? nodeRuntimeUnavailableMessage("Device automation")
-                  : "Could not prepare the agent-device launcher.",
-              cause: error,
-            }),
-        ),
-      );
+      const command = yield* devices.agentLauncher({
+        session: agent.session,
+        targetArgs: [
+          ...agentDeviceTargetArgs({ ...device, id: agent.agentDeviceId }),
+          ...agent.args,
+        ],
+      });
       return {
         device,
         agentDevice: { command, targetArgs: [] },

@@ -34,6 +34,7 @@ import { makeDeviceHubOperations } from "./DeviceHubOperations.ts";
 import { NodeRuntimeUnavailableError } from "@t3tools/shared/nodeRuntime";
 
 import * as DeviceService from "./DeviceService.ts";
+import { agentDeviceSession } from "./AgentDeviceTarget.ts";
 
 const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const decodeBootError = Schema.decodeUnknownSync(Schema.fromJsonString(DeviceBootError));
@@ -603,7 +604,7 @@ it.effect("keeps shutdown successful when subsequent discovery fails", () =>
 );
 
 it.effect.each(["shutdown", "close"] as const)(
-  "%s releases iOS capture so reopening uses a fresh session",
+  "%s releases iOS capture and the session's launcher so reopening uses a fresh session",
   (operation) =>
     Effect.gen(function* () {
       const deviceId = DeviceId.make("11111111-1111-1111-1111-111111111111");
@@ -680,19 +681,49 @@ it.effect.each(["shutdown", "close"] as const)(
         stopAgent: Effect.void,
         stop: Effect.void,
       };
-      const service = yield* DeviceService.makeWithHosts(new Map([[host.id, host]])).pipe(
-        Effect.provide(NodeCrypto.layer),
-      );
+      const launchers = new Set(["t3-from-a-previous-run"]);
+      const service = yield* DeviceService.makeWithHosts(
+        new Map([[host.id, host]]),
+        undefined,
+        undefined,
+        undefined,
+        {
+          bind: ({ session }) =>
+            Effect.sync(() => {
+              launchers.add(session);
+              return session;
+            }),
+          prune: (live) =>
+            Effect.sync(() => {
+              for (const session of launchers) if (!live.has(session)) launchers.delete(session);
+            }),
+        },
+      ).pipe(Effect.provide(NodeCrypto.layer));
+      expect(launchers).toEqual(new Set());
       const input = { threadId, deviceId, platform: "ios" as const };
-      yield* service.open(input);
+      const other = { ...input, threadId: ThreadId.make("capture-recovery-other") };
+      const bind = Effect.fnUntraced(function* (open: typeof input) {
+        yield* service.open(open);
+        const session = yield* agentDeviceSession(open.threadId, LOCAL_DEVICE_HOST_ID, deviceId);
+        yield* service.agentLauncher({ session, targetArgs: [] });
+        return session;
+      }, Effect.provide(NodeCrypto.layer));
+      const session = yield* bind(input);
+      yield* bind(other);
       expect(capture).toBe(1);
+      expect(launchers.size).toBe(2);
       if (operation === "shutdown") yield* service.shutdown(input);
       else yield* service.close({ threadId, deviceId, shutdown: true });
       expect(capture).toBeNull();
       expect((yield* service.state).sessions).toEqual([]);
-      yield* service.open(input);
+      expect(launchers).toEqual(new Set());
+      expect(yield* bind(input)).toBe(session);
       expect(capture).toBe(2);
       expect((yield* service.state).sessions).toHaveLength(1);
+      const otherSession = yield* bind(other);
+      yield* service.close({ threadId: other.threadId });
+      expect(launchers).toEqual(new Set([session]));
+      expect(otherSession).not.toBe(session);
     }).pipe(Effect.provide(ServerSettings.layerTest({ enableDeviceSupport: true })), Effect.scoped),
 );
 

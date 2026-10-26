@@ -7,7 +7,11 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import { bindAgentDeviceLauncher, ensureAgentDeviceShim } from "./AgentDeviceShim.ts";
+import {
+  bindAgentDeviceLauncher,
+  ensureAgentDeviceShim,
+  pruneAgentDeviceLaunchers,
+} from "./AgentDeviceShim.ts";
 import {
   agentDeviceConfigPath,
   agentDeviceSession,
@@ -151,6 +155,31 @@ exec '${process.execPath.replaceAll("'", "'\"'\"'")}' "$@"
       yield* Effect.promise(() =>
         expect(launch(bound, ["snapshot"])).rejects.toThrow("Call device_open again"),
       );
+    }).pipe(
+      Effect.scoped,
+      Effect.provideService(HostProcess.IsExecutable, false),
+      Effect.provideService(HostProcess.ExecutablePath, process.execPath),
+      Effect.provide(NodeServices.layer),
+    ),
+  );
+
+  it.effect("prunes the launchers of ended sessions and keeps the shared one", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-device-prune-" });
+      const entryPath = path.join(stateDir, "cli.mjs");
+      const shared = yield* ensureAgentDeviceShim({ entryPath, stateDir });
+      const bind = (session: string) =>
+        bindAgentDeviceLauncher({ entryPath, stateDir, session, targetArgs: [] });
+      const kept = yield* bind("t3-open");
+      const ended = yield* bind("t3-closed");
+      yield* pruneAgentDeviceLaunchers({ stateDir, live: new Set(["t3-open"]) });
+      expect(yield* fs.exists(kept)).toBe(true);
+      expect(yield* fs.exists(path.dirname(ended))).toBe(false);
+      expect(yield* fs.exists(shared)).toBe(true);
+      yield* pruneAgentDeviceLaunchers({ stateDir, live: new Set() });
+      expect(yield* fs.readDirectory(path.join(stateDir, "device", "targets"))).toEqual([]);
     }).pipe(
       Effect.scoped,
       Effect.provideService(HostProcess.IsExecutable, false),

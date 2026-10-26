@@ -8,8 +8,6 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
-import * as Path from "effect/Path";
 import * as Layer from "effect/Layer";
 import { McpSchema, McpServer } from "effect/ai";
 
@@ -135,7 +133,6 @@ const layerDeviceServiceMock = Layer.mock(DeviceService.DeviceService)({
     ),
   screenshot: () => Effect.succeed({ device, png }),
   close: () => Effect.void,
-  agentCli: Effect.succeed("/cli"),
   testHost: () => Effect.die("not used"),
   // As for an EAS device, agent-device knows the device by a different id than T3.
   agentTarget: () =>
@@ -144,6 +141,8 @@ const layerDeviceServiceMock = Layer.mock(DeviceService.DeviceService)({
       session: "thread-device",
       args: ["--config", "/host.json", "--session", "thread-device"],
     }),
+  agentLauncher: ({ session, targetArgs }) =>
+    Effect.succeed(`/state/device/targets/${session}/${targetArgs.join("_")}/agent-device`),
 });
 
 const layerTest = McpHttpServer.layerDeviceToolkit.pipe(
@@ -178,15 +177,8 @@ it.effect("registers the device tools and returns the screenshot as image conten
         `${openedContent.agentDevice.command} snapshot -i`,
       );
       // The launcher selects the device by agent-device's id for it, not T3's.
-      const launcher = yield* Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        return yield* fs.readFileString(
-          path.join(path.dirname(openedContent.agentDevice.command), "agent-device-launcher.mjs"),
-        );
-      }).pipe(Effect.provide(NodeServices.layer));
-      expect(launcher).toContain(
-        '"--udid","SIM-UDID","--config","/host.json","--session","thread-device"',
+      expect(openedContent.agentDevice.command).toBe(
+        "/state/device/targets/thread-device/--platform_ios_--udid_SIM-UDID_--config_/host.json_--session_thread-device/agent-device",
       );
 
       const shot = yield* server
@@ -334,13 +326,14 @@ describe("device targeting across hosts", () => {
         Effect.sync(() => {
           closed.push({ hostId: input.hostId, deviceId: input.deviceId });
         }),
-      agentCli: Effect.succeed("/cli"),
       agentTarget: () =>
         Effect.succeed({
           agentDeviceId: "MAC-UDID",
           session: "thread-device",
           args: ["--config", "/mac.json", "--session", "thread-device"],
         }),
+      agentLauncher: ({ session }) =>
+        Effect.succeed(`/state/device/targets/${session}/agent-device`),
     });
     const call = (name: string, args: Record<string, unknown>) =>
       McpServer.McpServer.pipe(
