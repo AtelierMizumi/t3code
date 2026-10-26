@@ -169,10 +169,23 @@ it.effect("registers the device tools and returns the screenshot as image conten
         .pipe(callWith(["device"]), Effect.provideService(McpSchema.McpServerClient, client));
       expect(opened.isError).toBe(false);
       const openedContent = opened.structuredContent as {
-        agentDevice: { command: string; targetArgs: ReadonlyArray<string> };
+        agentDevice: { command: string; targetArgs: ReadonlyArray<string>; session: string };
         quickStart: string;
       };
-      expect(openedContent.agentDevice.targetArgs).toEqual([]);
+      // Callers that pass the target flags, like test-t3-mobile's pair-client.sh, keep working.
+      expect(openedContent.agentDevice).toMatchObject({
+        targetArgs: [
+          "--platform",
+          "ios",
+          "--udid",
+          "SIM-UDID",
+          "--config",
+          "/host.json",
+          "--session",
+          "thread-device",
+        ],
+        session: "thread-device",
+      });
       expect(openedContent.quickStart).toContain(
         `${openedContent.agentDevice.command} snapshot -i`,
       );

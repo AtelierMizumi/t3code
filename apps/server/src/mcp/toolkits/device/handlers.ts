@@ -43,7 +43,7 @@ export function agentDeviceQuickStart(
   return [
     `The user is watching ${device.name} (${device.version}) in the Device panel.`,
     target === ""
-      ? `Drive it with ${executable}. It is bound to this device and session, so pass no --platform, --udid, --serial, --config or --session flags. Use this exact path; login shells may reset PATH.`
+      ? `Drive it with ${executable}. It is bound to this device and session, so it needs no --platform, --udid, --serial, --config or --session flags. Use this exact path; login shells may reset PATH.`
       : `Drive it with ${executable}. Use this exact path; login shells may reset PATH. Always pass ${target}.`,
     "Every app launch, deep link, tap, text entry, alert, setting, screenshot and recording on this device goes through it:",
     `  ${run("open <bundle-or-package-id> --relaunch")}  # restarts the app; Expo dev clients connect to their Metro, --metro-port <port> picks it`,
@@ -242,18 +242,19 @@ const handlers = {
         deviceId: device.id,
       });
       const cloud = after.hosts.some((host) => host.id === device.hostId && host.kind === "eas");
+      const targetArgs = [
+        ...agentDeviceTargetArgs({ ...device, id: agent.agentDeviceId }),
+        ...agent.args,
+      ];
       const command = yield* devices.agentLauncher({
         threadId: scope.thread.threadId,
         hostId: device.hostId,
         deviceId: device.id,
-        targetArgs: [
-          ...agentDeviceTargetArgs({ ...device, id: agent.agentDeviceId }),
-          ...agent.args,
-        ],
+        targetArgs,
       });
       return {
         device,
-        agentDevice: { command, targetArgs: [] },
+        agentDevice: { command, targetArgs, session: agent.session },
         quickStart: agentDeviceQuickStart(device, [], command, cloud),
       };
     }).pipe(Effect.mapError(toolError)),

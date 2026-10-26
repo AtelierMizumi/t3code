@@ -585,6 +585,7 @@ export const DeviceToolOpenResult = Schema.Struct({
   agentDevice: Schema.Struct({
     command: Schema.String,
     targetArgs: Schema.Array(Schema.String),
+    session: Schema.String,
   }),
   quickStart: Schema.String,
 });
