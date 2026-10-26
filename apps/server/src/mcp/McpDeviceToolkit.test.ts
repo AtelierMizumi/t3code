@@ -390,6 +390,32 @@ describe("device targeting across hosts", () => {
     ),
   );
 
+  it.effect("says why device_screenshot failed instead of a generic error", () =>
+    run([session("mac-mini", "MAC-UDID", "ios")], ({ call }) =>
+      Effect.gen(function* () {
+        const wrongHost = yield* call("device_screenshot", {
+          deviceId: "MAC-UDID",
+          hostId: "local",
+        });
+        expect(wrongHost.isError).toBe(true);
+        expect(text(wrongHost)).toContain("It is on 'Mac Mini' (hostId mac-mini)");
+      }),
+    ),
+  );
+
+  it.effect("tells an agent with no open device to call device_open before a screenshot", () =>
+    run([], ({ call }) =>
+      Effect.gen(function* () {
+        const result = yield* call("device_screenshot", {});
+        expect(result.isError).toBe(true);
+        expect(text(result)).toBe("No device is open in this thread. Call device_open first.");
+        expect(result.structuredContent).toMatchObject({
+          error: { _tag: "DeviceToolUnavailableError" },
+        });
+      }),
+    ),
+  );
+
   it.effect("refuses to close an id open on two hosts instead of closing both", () =>
     run(
       [session("local", "Pixel_10", "android"), session("mac-mini", "Pixel_10", "android")],
