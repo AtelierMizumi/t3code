@@ -1,8 +1,10 @@
 import {
   type DeviceError,
   type DeviceHostId,
+  type DeviceHostSummary,
   type DeviceId,
   type DevicePlatform,
+  type DeviceSession,
   type DeviceSummary,
   DeviceToolUnavailableError,
   LOCAL_DEVICE_HOST_ID,
@@ -72,25 +74,70 @@ const requireDeviceAccess = McpInvocationContext.requireThreadMcpCapability("dev
   ),
 );
 
+const hostName = (hosts: ReadonlyArray<DeviceHostSummary>, hostId: DeviceHostId) => {
+  const label = hosts.find((host) => host.id === hostId)?.label;
+  return label === undefined ? `hostId ${hostId}` : `'${label}' (hostId ${hostId})`;
+};
+
+/**
+ * Device ids are unique per host, not across hosts: an Android AVD name can exist on two.
+ * An explicit hostId decides; without one, the id has to name a single host.
+ */
+const selectByDeviceId = Effect.fn("handlers.selectByDeviceId")(function* <
+  T extends { readonly hostId: DeviceHostId },
+>(input: {
+  readonly deviceId: DeviceId;
+  readonly matches: ReadonlyArray<T>;
+  readonly hostId: DeviceHostId | undefined;
+  readonly hosts: Effect.Effect<ReadonlyArray<DeviceHostSummary>>;
+  readonly missing: (hostId: DeviceHostId | undefined) => string;
+}): Effect.fn.Return<T, DeviceToolUnavailableError> {
+  const onHost = input.matches.filter(
+    (match) => input.hostId === undefined || match.hostId === input.hostId,
+  );
+  const hostIds = [...new Set(onHost.map((match) => match.hostId))];
+  if (hostIds.length === 1) return onHost.at(-1)!;
+  const hosts = yield* input.hosts;
+  const names = (ids: ReadonlyArray<DeviceHostId>) =>
+    ids.map((id) => hostName(hosts, id)).join(", ");
+  if (hostIds.length > 1) {
+    return yield* new DeviceToolUnavailableError({
+      reason: `Device ${input.deviceId} is on more than one host: ${names(hostIds)}. Pass hostId.`,
+    });
+  }
+  const elsewhere = [...new Set(input.matches.map((match) => match.hostId))];
+  return yield* new DeviceToolUnavailableError({
+    reason:
+      input.hostId !== undefined && elsewhere.length > 0
+        ? `Device ${input.deviceId} is not on ${hostName(hosts, input.hostId)}. It is on ${names(elsewhere)}; pass that hostId.`
+        : input.missing(input.hostId),
+  });
+});
+
 const pickDevice = Effect.fn("handlers.pickDevice")(function* (
-  devices: ReadonlyArray<DeviceSummary>,
+  state: {
+    readonly hosts: ReadonlyArray<DeviceHostSummary>;
+    readonly devices: ReadonlyArray<DeviceSummary>;
+  },
   input: {
     readonly deviceId?: DeviceId | undefined;
     readonly platform?: DevicePlatform | undefined;
     readonly hostId?: DeviceHostId | undefined;
   },
 ): Effect.fn.Return<DeviceSummary, DeviceToolUnavailableError> {
-  const hostId = input.hostId ?? LOCAL_DEVICE_HOST_ID;
   if (input.deviceId !== undefined) {
-    const match = devices.find(
-      (device) => device.hostId === hostId && device.id === input.deviceId,
-    );
-    if (match) return match;
-    return yield* new DeviceToolUnavailableError({
-      reason: `No device ${input.deviceId} on host ${hostId}. Call device_list for current ids.`,
+    const deviceId = input.deviceId;
+    return yield* selectByDeviceId({
+      deviceId,
+      matches: state.devices.filter((device) => device.id === deviceId),
+      hostId: input.hostId,
+      hosts: Effect.succeed(state.hosts),
+      missing: (hostId) =>
+        `No device ${deviceId} on ${hostId === undefined ? "any host" : hostName(state.hosts, hostId)}. Call device_list for current ids.`,
     });
   }
-  const candidates = devices.filter(
+  const hostId = input.hostId ?? LOCAL_DEVICE_HOST_ID;
+  const candidates = state.devices.filter(
     (device) =>
       device.hostId === hostId &&
       (input.platform === undefined || device.platform === input.platform),
@@ -111,6 +158,20 @@ const pickDevice = Effect.fn("handlers.pickDevice")(function* (
   }
   return candidates.find((device) => device.booted) ?? candidates[0]!;
 });
+
+const selectOpenSession = (
+  devices: DeviceService.DeviceService["Service"],
+  sessions: ReadonlyArray<DeviceSession>,
+  deviceId: DeviceId,
+  hostId: DeviceHostId | undefined,
+) =>
+  selectByDeviceId({
+    deviceId,
+    matches: sessions.filter((session) => session.deviceId === deviceId),
+    hostId,
+    hosts: devices.state.pipe(Effect.map((state) => state.hosts)),
+    missing: () => `Device ${deviceId} is not open in this thread. Call device_open first.`,
+  });
 
 const toolError = (error: DeviceError | DeviceToolUnavailableError) => error;
 
@@ -153,7 +214,7 @@ const handlers = {
             "Device support is off. Ask the user to enable it in the Device panel before installing or starting device tools.",
         });
       }
-      const target = yield* pickDevice(state.devices, input);
+      const target = yield* pickDevice(state, input);
       // Resolve consent and agent connectivity before booting or registering a session.
       if (!(yield* devices.agentReadinessIfSupported(target.hostId))) {
         return yield* new DeviceToolUnavailableError({
@@ -221,19 +282,15 @@ const handlers = {
       const scope = yield* requireDeviceAccess;
       const devices = yield* DeviceService.DeviceService;
       const sessions = yield* devices.sessionsForThread(scope.thread.threadId);
-      const hostId =
-        input.deviceId === undefined ? input.hostId : (input.hostId ?? LOCAL_DEVICE_HOST_ID);
-      const target = sessions.findLast(
-        (session) =>
-          (hostId === undefined || session.hostId === hostId) &&
-          (input.deviceId === undefined || session.deviceId === input.deviceId),
-      );
+      const target =
+        input.deviceId === undefined
+          ? sessions.findLast(
+              (session) => input.hostId === undefined || session.hostId === input.hostId,
+            )
+          : yield* selectOpenSession(devices, sessions, input.deviceId, input.hostId);
       if (!target) {
         return yield* new DeviceToolUnavailableError({
-          reason:
-            input.deviceId === undefined
-              ? "No device is open in this thread. Call device_open first."
-              : `Device ${input.deviceId} on host ${hostId} is not open in this thread. Call device_open first.`,
+          reason: "No device is open in this thread. Call device_open first.",
         });
       }
       const shot = yield* devices.screenshot(target);
@@ -251,10 +308,17 @@ const handlers = {
     Effect.gen(function* () {
       const scope = yield* requireDeviceAccess;
       const devices = yield* DeviceService.DeviceService;
+      const deviceId = input.deviceId;
+      const sessions =
+        deviceId === undefined ? [] : yield* devices.sessionsForThread(scope.thread.threadId);
+      const hostId =
+        deviceId === undefined || !sessions.some((session) => session.deviceId === deviceId)
+          ? input.hostId
+          : (yield* selectOpenSession(devices, sessions, deviceId, input.hostId)).hostId;
       yield* devices.close({
         threadId: scope.thread.threadId,
-        ...(input.hostId === undefined ? {} : { hostId: input.hostId }),
-        ...(input.deviceId === undefined ? {} : { deviceId: input.deviceId }),
+        ...(hostId === undefined ? {} : { hostId }),
+        ...(deviceId === undefined ? {} : { deviceId }),
         ...(input.shutdown === undefined ? {} : { shutdown: input.shutdown }),
       });
       return {};

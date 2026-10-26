@@ -1,4 +1,4 @@
-import { expect, it } from "@effect/vitest";
+import { describe, expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   DeviceHostUnavailableError,
@@ -231,6 +231,175 @@ it.effect("rejects unavailable agent access before booting or opening a device",
         ),
         Layer.provide(NodeServices.layer),
       ),
+    ),
+  );
+});
+
+describe("device targeting across hosts", () => {
+  const macHost = {
+    id: "mac-mini",
+    kind: "ssh" as const,
+    label: "Mac Mini",
+    platforms: [
+      { platform: "ios" as const, available: true },
+      { platform: "android" as const, available: true },
+    ],
+    hubInstalled: true,
+    agentDeviceInstalled: true,
+  };
+  const macIphone = { ...device, hostId: "mac-mini", id: "MAC-UDID" };
+  const localPixel = {
+    hostId: "local",
+    id: "Pixel_10",
+    platform: "android" as const,
+    name: "Pixel 10",
+    version: "Android 16",
+    booted: false,
+    physical: false,
+  };
+  const macPixel = { ...localPixel, hostId: "mac-mini" };
+  const multiHostState = {
+    ...state,
+    hosts: [...state.hosts, macHost],
+    hostStatuses: {
+      local: { status: "ready" as const },
+      "mac-mini": { status: "ready" as const },
+    },
+    devices: [device, macIphone, localPixel, macPixel],
+  };
+  const session = (hostId: string, deviceId: string, platform: "ios" | "android") => ({
+    threadId,
+    hostId,
+    deviceId: DeviceId.make(deviceId),
+    platform,
+    openedAt: "2026-09-08T00:00:00.000Z",
+  });
+
+  const run = <A, E>(
+    sessions: ReadonlyArray<ReturnType<typeof session>>,
+    program: (calls: {
+      readonly opened: Array<{ hostId: string; deviceId: string }>;
+      readonly closed: Array<{ hostId?: string | undefined; deviceId?: string | undefined }>;
+      readonly call: (
+        name: string,
+        args: Record<string, unknown>,
+      ) => Effect.Effect<
+        McpSchema.CallToolResult,
+        McpSchema.InternalError | McpSchema.InvalidParams,
+        McpServer.McpServer
+      >;
+    }) => Effect.Effect<A, E, McpServer.McpServer>,
+  ) => {
+    const opened: Array<{ hostId: string; deviceId: string }> = [];
+    const closed: Array<{ hostId?: string | undefined; deviceId?: string | undefined }> = [];
+    const layerDevices = Layer.mock(DeviceService.DeviceService)({
+      state: Effect.succeed(multiHostState),
+      list: Effect.succeed(multiHostState),
+      agentReadinessIfSupported: () => Effect.succeed(readiness),
+      open: (input) =>
+        Effect.sync(() => {
+          opened.push({ hostId: input.hostId ?? "local", deviceId: input.deviceId });
+          return session(input.hostId ?? "local", input.deviceId, input.platform);
+        }),
+      sessionsForThread: () => Effect.succeed(sessions),
+      screenshot: (target) =>
+        Effect.succeed({
+          device:
+            multiHostState.devices.find(
+              (candidate) => candidate.hostId === target.hostId && candidate.id === target.deviceId,
+            ) ?? device,
+          png,
+        }),
+      close: (input) =>
+        Effect.sync(() => {
+          closed.push({ hostId: input.hostId, deviceId: input.deviceId });
+        }),
+      agentCli: Effect.succeed("/cli"),
+      agentTarget: () =>
+        Effect.succeed({
+          agentDeviceId: "MAC-UDID",
+          args: ["--config", "/mac.json", "--session", "thread-device"],
+        }),
+    });
+    const call = (name: string, args: Record<string, unknown>) =>
+      McpServer.McpServer.pipe(
+        Effect.flatMap((server) => server.callTool({ name, arguments: args })),
+        Effect.provideService(McpInvocationContext.McpInvocationContext, invocation(["device"])),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+    return program({ opened, closed, call }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        McpHttpServer.layerDeviceToolkit.pipe(
+          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
+          Layer.provide(layerDevices),
+          Layer.provide(layerProjectsMock),
+          Layer.provide(
+            ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-device-toolkit-test-" }),
+          ),
+          Layer.provide(NodeServices.layer),
+        ),
+      ),
+    );
+  };
+  const text = (result: McpSchema.CallToolResult) =>
+    result.content.flatMap((entry) => (entry.type === "text" ? [entry.text] : [])).join("\n");
+
+  it.effect("opens a device id that exists only on another host", () =>
+    run([], ({ opened, call }) =>
+      Effect.gen(function* () {
+        const result = yield* call("device_open", { deviceId: "MAC-UDID" });
+        expect(text(result)).not.toContain("No device");
+        expect(result.isError).toBe(false);
+        expect(opened).toEqual([{ hostId: "mac-mini", deviceId: "MAC-UDID" }]);
+      }),
+    ),
+  );
+
+  it.effect("refuses a device id that exists on two hosts and names both", () =>
+    run([], ({ opened, call }) =>
+      Effect.gen(function* () {
+        const result = yield* call("device_open", { deviceId: "Pixel_10" });
+        expect(result.isError).toBe(true);
+        expect(text(result)).toContain("hostId local");
+        expect(text(result)).toContain("hostId mac-mini");
+        expect(opened).toEqual([]);
+      }),
+    ),
+  );
+
+  it.effect("keeps an explicit hostId and says which host has the device", () =>
+    run([], ({ opened, call }) =>
+      Effect.gen(function* () {
+        const result = yield* call("device_open", { deviceId: "MAC-UDID", hostId: "local" });
+        expect(result.isError).toBe(true);
+        expect(text(result)).toContain("hostId mac-mini");
+        expect(opened).toEqual([]);
+      }),
+    ),
+  );
+
+  it.effect("screenshots an open device by id on whichever host it is on", () =>
+    run([session("mac-mini", "MAC-UDID", "ios")], ({ call }) =>
+      Effect.gen(function* () {
+        const result = yield* call("device_screenshot", { deviceId: "MAC-UDID" });
+        expect(result.isError).toBe(false);
+        expect(result.structuredContent).toMatchObject({ device: { hostId: "mac-mini" } });
+      }),
+    ),
+  );
+
+  it.effect("refuses to close an id open on two hosts instead of closing both", () =>
+    run(
+      [session("local", "Pixel_10", "android"), session("mac-mini", "Pixel_10", "android")],
+      ({ closed, call }) =>
+        Effect.gen(function* () {
+          const result = yield* call("device_close", { deviceId: "Pixel_10" });
+          expect(result.isError).toBe(true);
+          expect(text(result)).toContain("hostId mac-mini");
+          expect(closed).toEqual([]);
+        }),
     ),
   );
 });
