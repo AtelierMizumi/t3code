@@ -13,16 +13,19 @@ const STALE_RUNTIME =
 const quoteShell = (value: string) => "'" + value.replaceAll("'", "'\"'\"'") + "'";
 
 // Help needs no device, and agent-device reads --config even for help, so help gets no bound flags.
+// Arguments after `--` are text, so only those before it are read as flags.
 const launcherSource = (node: string, entryPath: string, boundArgs: ReadonlyArray<string>) =>
   `import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 const entry = ${JSON.stringify(entryPath)};
 const bound = ${JSON.stringify(boundArgs)};
 const args = process.argv.slice(2);
-const informational = args.length === 0 || ["help", "--help", "-h", "--version", "version"].includes(args[0]) || args.includes("--help") || args.includes("-h");
-const command = [...args];
-if (!informational) for (let index = 0; index + 1 < bound.length; index += 2) if (!args.includes(bound[index])) command.push(bound[index], bound[index + 1]);
-const hasValue = flag => { const index = command.indexOf(flag); return index >= 0 && !!command[index + 1] && !command[index + 1].startsWith("--"); };
+const end = args.indexOf("--");
+const options = end < 0 ? args : args.slice(0, end);
+const informational = args.length === 0 || ["help", "--help", "-h", "--version", "version"].includes(args[0]) || options.includes("--help") || options.includes("-h");
+if (!informational) for (let index = 0; index + 1 < bound.length; index += 2) if (!options.some(arg => arg === bound[index] || arg.startsWith(bound[index] + "="))) options.push(bound[index], bound[index + 1]);
+const command = end < 0 ? options : [...options, ...args.slice(end)];
+const hasValue = flag => { const index = options.indexOf(flag); return options.some(arg => arg.startsWith(flag + "=") && arg.length > flag.length + 1) || (index >= 0 && !!options[index + 1] && !options[index + 1].startsWith("--")); };
 if (!informational && !(hasValue("--config") && hasValue("--session"))) {
   console.error("Call device_open first and run the agent-device command it returns.");
   process.exit(1);

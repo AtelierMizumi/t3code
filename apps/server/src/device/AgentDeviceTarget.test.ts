@@ -113,6 +113,36 @@ exec '${process.execPath.replaceAll("'", "'\"'\"'")}' "$@"
         "--config",
         "/h.json",
       ]);
+      expect(yield* Effect.promise(() => launch(bound, ["snapshot", "--session=mine"]))).toEqual([
+        "snapshot",
+        "--session=mine",
+        "--platform",
+        "ios",
+        "--udid",
+        "UDID-1",
+        "--config",
+        "/h.json",
+      ]);
+      // After `--` everything is text: no help, no overrides, and bound flags go before it.
+      for (const text of [["--help"], ["literal text", "--session", "mine"]]) {
+        expect(yield* Effect.promise(() => launch(bound, ["fill", "@e5", "--", ...text]))).toEqual([
+          "fill",
+          "@e5",
+          ...target,
+          "--",
+          ...text,
+        ]);
+      }
+      expect(
+        yield* Effect.promise(() =>
+          launch(shared, ["snapshot", "--config=/h.json", "--session=t3-a"]),
+        ),
+      ).toEqual(["snapshot", "--config=/h.json", "--session=t3-a"]);
+      yield* Effect.promise(() =>
+        expect(
+          launch(shared, ["fill", "@e5", "--", "--config", "/h.json", "--session", "t3-a"]),
+        ).rejects.toThrow("Call device_open first"),
+      );
       for (const args of [["help", "gesture"], ["open", "--help"], ["record", "-h"], []]) {
         expect(yield* Effect.promise(() => launch(bound, args))).toEqual(args);
         expect(yield* Effect.promise(() => launch(shared, args))).toEqual(args);
