@@ -702,11 +702,15 @@ it.effect.each(["shutdown", "close"] as const)(
       expect(launchers).toEqual(new Set());
       const input = { threadId, deviceId, platform: "ios" as const };
       const other = { ...input, threadId: ThreadId.make("capture-recovery-other") };
+      const target = (thread: ThreadId) => ({
+        threadId: thread,
+        hostId: LOCAL_DEVICE_HOST_ID,
+        deviceId,
+      });
       const bind = Effect.fnUntraced(function* (open: typeof input) {
         yield* service.open(open);
-        const session = yield* agentDeviceSession(open.threadId, LOCAL_DEVICE_HOST_ID, deviceId);
-        yield* service.agentLauncher({ session, targetArgs: [] });
-        return session;
+        yield* service.agentLauncher({ ...target(open.threadId), targetArgs: [] });
+        return yield* agentDeviceSession(open.threadId, LOCAL_DEVICE_HOST_ID, deviceId);
       }, Effect.provide(NodeCrypto.layer));
       const session = yield* bind(input);
       yield* bind(other);
@@ -716,6 +720,12 @@ it.effect.each(["shutdown", "close"] as const)(
       else yield* service.close({ threadId, deviceId, shutdown: true });
       expect(capture).toBeNull();
       expect((yield* service.state).sessions).toEqual([]);
+      expect(launchers).toEqual(new Set());
+      // A device_open that was still preparing when the close landed.
+      const late = yield* Effect.exit(
+        service.agentLauncher({ ...target(threadId), targetArgs: [] }),
+      );
+      expect(Exit.isFailure(late)).toBe(true);
       expect(launchers).toEqual(new Set());
       expect(yield* bind(input)).toBe(session);
       expect(capture).toBe(2);

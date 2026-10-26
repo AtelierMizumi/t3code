@@ -141,8 +141,8 @@ const layerDeviceServiceMock = Layer.mock(DeviceService.DeviceService)({
       session: "thread-device",
       args: ["--config", "/host.json", "--session", "thread-device"],
     }),
-  agentLauncher: ({ session, targetArgs }) =>
-    Effect.succeed(`/state/device/targets/${session}/${targetArgs.join("_")}/agent-device`),
+  agentLauncher: ({ targetArgs }) =>
+    Effect.succeed(`/state/device/targets/thread-device/${targetArgs.join("_")}/agent-device`),
 });
 
 const layerTest = McpHttpServer.layerDeviceToolkit.pipe(
@@ -332,8 +332,7 @@ describe("device targeting across hosts", () => {
           session: "thread-device",
           args: ["--config", "/mac.json", "--session", "thread-device"],
         }),
-      agentLauncher: ({ session }) =>
-        Effect.succeed(`/state/device/targets/${session}/agent-device`),
+      agentLauncher: () => Effect.succeed("/state/device/targets/thread-device/agent-device"),
     });
     const call = (name: string, args: Record<string, unknown>) =>
       McpServer.McpServer.pipe(

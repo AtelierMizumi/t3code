@@ -134,7 +134,9 @@ export class DeviceService extends Context.Service<
     >;
     /** The command agents run for one agent-device session; it is removed when the session ends. */
     readonly agentLauncher: (input: {
-      readonly session: string;
+      readonly threadId: ThreadId;
+      readonly hostId: DeviceHostId;
+      readonly deviceId: DeviceId;
       readonly targetArgs: ReadonlyArray<string>;
     }) => Effect.Effect<string, DeviceError>;
     readonly state: Effect.Effect<DeviceServiceState>;
@@ -175,7 +177,10 @@ interface ServiceState {
 }
 
 export interface AgentDeviceLaunchers {
-  readonly bind: DeviceService["Service"]["agentLauncher"];
+  readonly bind: (input: {
+    readonly session: string;
+    readonly targetArgs: ReadonlyArray<string>;
+  }) => Effect.Effect<string, DeviceError>;
   /** Removes every launcher whose session is not in `live`. */
   readonly prune: (live: ReadonlySet<string>) => Effect.Effect<void>;
 }
@@ -242,7 +247,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
   });
 
   const launcherLock = yield* Semaphore.make(1);
-  // Reads sessions under the lock, so a launcher bound after a prune began is never removed by it.
+  // Binding and pruning read sessions under the lock, so neither acts on a session list the other has outdated.
   const pruneLaunchers = launcherLock.withPermit(
     Effect.gen(function* () {
       if (!launchers) return;
@@ -913,15 +918,39 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
         ).pipe(Effect.provideService(Crypto.Crypto, crypto));
         return { agentDeviceId, session, args: ["--config", configPath, "--session", session] };
       }),
-      agentLauncher: (input) =>
-        launchers
-          ? launcherLock.withPermit(launchers.bind(input))
-          : Effect.fail(
-              new DeviceHostUnavailableError({
-                hostId: LOCAL_DEVICE_HOST_ID,
-                reason: "Agent launchers are unavailable in this device service.",
-              }),
-            ),
+      agentLauncher: Effect.fn("DeviceService.agentLauncher")(function* ({
+        targetArgs,
+        ...target
+      }) {
+        if (!launchers)
+          return yield* new DeviceHostUnavailableError({
+            hostId: target.hostId,
+            reason: "Agent launchers are unavailable in this device service.",
+          });
+        const session = yield* agentDeviceSession(
+          target.threadId,
+          target.hostId,
+          target.deviceId,
+        ).pipe(Effect.provideService(Crypto.Crypto, crypto));
+        return yield* launcherLock.withPermit(
+          Effect.gen(function* () {
+            const { state } = yield* SynchronizedRef.get(stateRef);
+            if (
+              !state.sessions.some(
+                (live) =>
+                  live.threadId === target.threadId &&
+                  live.hostId === target.hostId &&
+                  live.deviceId === target.deviceId,
+              )
+            )
+              return yield* new DeviceHostUnavailableError({
+                hostId: target.hostId,
+                reason: "The device closed while it was opening. Retry the operation.",
+              });
+            return yield* launchers.bind({ session, targetArgs });
+          }),
+        );
+      }),
       state: SynchronizedRef.get(stateRef).pipe(Effect.map(({ state }) => state)),
       subscribe: PubSub.subscribe(statePubSub),
       configure,

@@ -243,7 +243,9 @@ const handlers = {
       });
       const cloud = after.hosts.some((host) => host.id === device.hostId && host.kind === "eas");
       const command = yield* devices.agentLauncher({
-        session: agent.session,
+        threadId: scope.thread.threadId,
+        hostId: device.hostId,
+        deviceId: device.id,
         targetArgs: [
           ...agentDeviceTargetArgs({ ...device, id: agent.agentDeviceId }),
           ...agent.args,
