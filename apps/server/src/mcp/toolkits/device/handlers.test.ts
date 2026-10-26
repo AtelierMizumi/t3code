@@ -34,6 +34,7 @@ describe("device tool helpers", () => {
     expect(examples.join("\n")).not.toMatch(/--(?:platform|udid|serial|config|session)\b/);
     expect(text).not.toContain("remain available");
     expect(text).toContain("Do not use simctl, idb, adb or ssh for those actions.");
+    expect(text).toContain("If it is missing, call device_open again.");
   });
 
   it("reads PNG dimensions from the IHDR chunk", () => {

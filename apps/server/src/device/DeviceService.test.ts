@@ -19,6 +19,7 @@ import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -722,10 +723,9 @@ it.effect.each(["shutdown", "close"] as const)(
       expect((yield* service.state).sessions).toEqual([]);
       expect(launchers).toEqual(new Set());
       // A device_open that was still preparing when the close landed.
-      const late = yield* Effect.exit(
-        service.agentLauncher({ ...target(threadId), targetArgs: [] }),
+      expect(yield* service.agentLauncher({ ...target(threadId), targetArgs: [] })).toEqual(
+        Option.none(),
       );
-      expect(Exit.isFailure(late)).toBe(true);
       expect(launchers).toEqual(new Set());
       expect(yield* bind(input)).toBe(session);
       expect(capture).toBe(2);

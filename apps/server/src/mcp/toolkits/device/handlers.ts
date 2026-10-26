@@ -10,6 +10,7 @@ import {
   LOCAL_DEVICE_HOST_ID,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as DeviceService from "../../../device/DeviceService.ts";
 import { threadWorkspaceRoot } from "../../../project/threadWorkspaceRoot.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -59,6 +60,11 @@ export function agentDeviceQuickStart(
     `Prefer snapshot refs over coordinates. Run ${executable} help <command> for flags and ${executable} help workflow for guides.`,
     "Do not use simctl, idb, adb or ssh for those actions. They stay fine for builds, installs, code sync, Metro, port forwards, logs, test runners and what this command cannot do; come back to it for every UI action and screenshot so the user can watch.",
     "Each device_open returns its own command; opening another device does not retarget this one.",
+    ...(target === ""
+      ? [
+          "The command is removed when the device closes or T3 Code restarts. If it is missing, call device_open again.",
+        ]
+      : []),
     platformNotes,
   ].join("\n");
 }
@@ -236,22 +242,25 @@ const handlers = {
         ) ?? target;
       // Target the opened device: an EAS device and its agent-device daemon
       // exist only once its session runs, and Android ids change on boot.
-      const agent = yield* devices.agentTarget({
+      const opened = {
         threadId: scope.thread.threadId,
-        hostId: device.hostId,
-        deviceId: device.id,
-      });
+        hostId: session.hostId,
+        deviceId: session.deviceId,
+      };
+      const agent = yield* devices.agentTarget(opened);
       const cloud = after.hosts.some((host) => host.id === device.hostId && host.kind === "eas");
       const targetArgs = [
         ...agentDeviceTargetArgs({ ...device, id: agent.agentDeviceId }),
         ...agent.args,
       ];
-      const command = yield* devices.agentLauncher({
-        threadId: scope.thread.threadId,
-        hostId: device.hostId,
-        deviceId: device.id,
-        targetArgs,
-      });
+      const launcher = yield* devices.agentLauncher({ ...opened, targetArgs });
+      if (Option.isNone(launcher)) {
+        return yield* new DeviceToolUnavailableError({
+          reason:
+            "The device was closed while device_open was preparing it. Call device_open again only if you still need it.",
+        });
+      }
+      const command = launcher.value;
       return {
         device,
         agentDevice: { command, targetArgs, session: agent.session },

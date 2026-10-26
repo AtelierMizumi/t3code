@@ -9,6 +9,7 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import { McpSchema, McpServer } from "effect/ai";
 
 import * as ServerConfig from "../config.ts";
@@ -142,7 +143,7 @@ const layerDeviceServiceMock = Layer.mock(DeviceService.DeviceService)({
       args: ["--config", "/host.json", "--session", "thread-device"],
     }),
   agentLauncher: ({ targetArgs }) =>
-    Effect.succeed(`/state/device/targets/thread-device/${targetArgs.join("_")}/agent-device`),
+    Effect.succeedSome(`/state/device/targets/thread-device/${targetArgs.join("_")}/agent-device`),
 });
 
 const layerTest = McpHttpServer.layerDeviceToolkit.pipe(
@@ -314,6 +315,7 @@ describe("device targeting across hosts", () => {
         McpServer.McpServer
       >;
     }) => Effect.Effect<A, E, McpServer.McpServer>,
+    overrides: Partial<DeviceService.DeviceService["Service"]> = {},
   ) => {
     const opened: Array<{ hostId: string; deviceId: string }> = [];
     const closed: Array<{ hostId?: string | undefined; deviceId?: string | undefined }> = [];
@@ -345,7 +347,8 @@ describe("device targeting across hosts", () => {
           session: "thread-device",
           args: ["--config", "/mac.json", "--session", "thread-device"],
         }),
-      agentLauncher: () => Effect.succeed("/state/device/targets/thread-device/agent-device"),
+      agentLauncher: () => Effect.succeedSome("/state/device/targets/thread-device/agent-device"),
+      ...overrides,
     });
     const call = (name: string, args: Record<string, unknown>) =>
       McpServer.McpServer.pipe(
@@ -380,6 +383,48 @@ describe("device targeting across hosts", () => {
         expect(result.isError).toBe(false);
         expect(opened).toEqual([{ hostId: "mac-mini", deviceId: "MAC-UDID" }]);
       }),
+    ),
+  );
+
+  it.effect("binds the launcher to the id the device booted with", () => {
+    const targets: Array<string> = [];
+    return run(
+      [],
+      ({ call }) =>
+        Effect.gen(function* () {
+          const result = yield* call("device_open", { deviceId: "Pixel_10", hostId: "mac-mini" });
+          expect(result.isError).toBe(false);
+          expect(targets).toEqual(["emulator-5554", "emulator-5554"]);
+        }),
+      {
+        open: (input) =>
+          Effect.succeed(session(input.hostId ?? "local", "emulator-5554", "android")),
+        agentTarget: (target) =>
+          Effect.sync(() => {
+            targets.push(target.deviceId);
+            return { agentDeviceId: target.deviceId, session: "thread-device", args: [] };
+          }),
+        agentLauncher: (target) =>
+          Effect.sync(() => {
+            targets.push(target.deviceId);
+            return Option.some("/state/device/targets/thread-device/agent-device");
+          }),
+      },
+    );
+  });
+
+  it.effect("says a device closed during device_open was closed, not that its host is down", () =>
+    run(
+      [],
+      ({ call }) =>
+        Effect.gen(function* () {
+          const result = yield* call("device_open", { deviceId: "MAC-UDID" });
+          expect(result.isError).toBe(true);
+          expect(text(result)).toBe(
+            "The device was closed while device_open was preparing it. Call device_open again only if you still need it.",
+          );
+        }),
+      { agentLauncher: () => Effect.succeedNone },
     ),
   );
 

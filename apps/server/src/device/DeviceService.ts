@@ -49,6 +49,7 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
@@ -132,13 +133,16 @@ export class DeviceService extends Context.Service<
       },
       DeviceError
     >;
-    /** The command agents run for one agent-device session; it is removed when the session ends. */
+    /**
+     * The command agents run for one agent-device session; it is removed when the session ends.
+     * None when the session closed before it could be bound.
+     */
     readonly agentLauncher: (input: {
       readonly threadId: ThreadId;
       readonly hostId: DeviceHostId;
       readonly deviceId: DeviceId;
       readonly targetArgs: ReadonlyArray<string>;
-    }) => Effect.Effect<string, DeviceError>;
+    }) => Effect.Effect<Option.Option<string>, DeviceError>;
     readonly state: Effect.Effect<DeviceServiceState>;
     readonly subscribe: Effect.Effect<PubSub.Subscription<DeviceServiceState>, never, Scope.Scope>;
     readonly configure: (
@@ -943,11 +947,8 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
                   live.deviceId === target.deviceId,
               )
             )
-              return yield* new DeviceHostUnavailableError({
-                hostId: target.hostId,
-                reason: "The device closed while it was opening. Retry the operation.",
-              });
-            return yield* launchers.bind({ session, targetArgs });
+              return Option.none();
+            return Option.some(yield* launchers.bind({ session, targetArgs }));
           }),
         );
       }),
