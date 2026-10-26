@@ -91,19 +91,20 @@ enabled, the session has the `device` capability, and the machine can run at
 least one platform. Starting it later from `device_open` would leave the
 already-running agent without the CLI.
 
-The full command loop is returned from `device_open`, not kept in an
+How to drive a device is returned from `device_open`, not kept in an
 always-loaded prompt or skill: it costs nothing in threads that never open a
 device and cannot drift from the pinned CLI version. `device_open` returns a
-launcher bound to its agent-device session, so agents pass no target flags.
+launcher bound to its agent-device session, so agents need no target flags.
 
-Agents choose between these tools and ssh before they open anything, so the
-always-on block in
+Agents choose between these tools and ssh before they open anything, so
+sessions that hold `device` get a short block from
 [`orchestrationInstructions.ts`](../../packages/provider-core/src/server/orchestrationInstructions.ts)
-goes to every provider session that holds `device`. That includes delegated
-children, which otherwise see only their task. The block routes simulator and
-emulator UI work on local and SSH hosts to the tools, and it names the few verbs
-agents used to reach `simctl` for. It leaves ssh for builds, installs, sync,
-Metro, port forwards and logs.
+through their adapter's instruction channel. It points simulator and emulator UI
+work on local and SSH hosts at the tools; `simctl`, `adb` and ssh stay
+available for what the tools do not cover. Pi and Muse do not send it yet.
+Claude's native subagents never see the session's system prompt, so a
+`SubagentStart` hook passes them the block, where the runtime runs hooks and the
+subagent's context is not isolated.
 
 ## The viewer decodes both vendored protocols
 
