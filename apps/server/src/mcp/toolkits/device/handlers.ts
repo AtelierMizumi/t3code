@@ -54,7 +54,7 @@ export function agentDeviceQuickStart(
     `  ${run('fill @e5 "text" --settle')}`,
     `  ${run("alert accept")}`,
     `  ${run("settings appearance dark")}  # also text-size, permission grant <name>`,
-    `  ${run("screenshot /tmp/shot.png")}  # or call device_screenshot to look`,
+    `  ${run("screenshot /tmp/shot.png")}  # ${device.platform === "ios" ? "iOS saves 1x points; add --pixel-density <n> (3 on most iPhones) for device resolution, " : ""}or call device_screenshot to look`,
     `  ${run("record start /tmp/run.mp4")}  # then record stop`,
     `  ${run("install <app> <path-to-.app-or-.apk>")}`,
     `Prefer snapshot refs over coordinates. Run ${executable} help <command> for flags and ${executable} help workflow for guides.`,
