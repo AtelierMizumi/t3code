@@ -41,13 +41,14 @@ describe("device tool helpers", () => {
     expect(text).toContain("If it is missing, call device_open again.");
   });
 
-  it("starts with open, which creates the session, and records the device screen", () => {
+  it("opens the app before snapshots, CLI screenshots or input, looks with device_screenshot, and records the device screen", () => {
     const command = "/state/device/targets/t3-a/agent-device";
     const text = agentDeviceQuickStart(device, [], command);
+    // device_open starts no agent-device session, and an iOS snapshot needs one with an app.
     expect(text).toContain(
-      "Start with open <bundle-or-package-id>, or open alone for the home screen; the other commands need the session it starts:",
+      "Run open <bundle-or-package-id> (apps lists them) before snapshots, CLI screenshots or input; it starts the session they need. Use device_screenshot just to look.",
     );
-    // App-scoped recording needs an app opened in the session; device scope works after a bare open.
+    // App-scoped recording needs an app opened in the session; device scope does not.
     expect(text).toContain(
       `  ${command} record start --scope device /tmp/run.mp4  # then record stop`,
     );

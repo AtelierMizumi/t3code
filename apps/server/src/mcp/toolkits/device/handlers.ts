@@ -45,9 +45,10 @@ export function agentDeviceQuickStart(
     target === ""
       ? `Drive it with ${executable}. It is bound to this device and session, so it needs no --platform, --udid, --serial, --config or --session flags. Use this exact path; login shells may reset PATH.`
       : `Drive it with ${executable}. Use this exact path; login shells may reset PATH. Always pass ${target}.`,
-    // agent-device creates the session on the agent's first open. device_open does not run open
-    // itself: on iOS that can start a minutes-long XCTest runner build.
-    "Every app launch, deep link, tap, text entry, alert, setting, screenshot and recording on this device goes through it. Start with open <bundle-or-package-id>, or open alone for the home screen; the other commands need the session it starts:",
+    // Screenshots and input need the session agent-device's open starts, and an iOS snapshot also
+    // needs its app. device_open does not run open itself: on iOS that can start a minutes-long
+    // XCTest runner build.
+    "Every app launch, deep link, tap, text entry, alert, setting, screenshot and recording on this device goes through it. Run open <bundle-or-package-id> (apps lists them) before snapshots, CLI screenshots or input; it starts the session they need. Use device_screenshot just to look.",
     `  ${run("open <bundle-or-package-id> --relaunch")}  # restarts the app; Expo dev clients connect to their Metro, --metro-port <port> picks it`,
     `  ${run("open <bundle-or-package-id> <deep-link-url>")}`,
     `  ${run("snapshot -i")}  # accessibility tree with @eN refs`,

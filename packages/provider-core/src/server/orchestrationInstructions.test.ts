@@ -24,10 +24,10 @@ describe("T3 device instructions", () => {
     );
   });
 
-  it("start the returned command with open, which creates the agent-device session the rest need", () => {
+  it("open the app before the returned command's snapshots, screenshots and input", () => {
     assert.include(
       T3_CODE_DEVICE_TOOL_INSTRUCTIONS,
-      "Run that command, starting with `open <app>` (or `open` for the home screen), for every",
+      "its snapshots, screenshots and input need `open <app>` first,",
     );
   });
 
