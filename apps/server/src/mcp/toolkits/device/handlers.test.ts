@@ -41,6 +41,18 @@ describe("device tool helpers", () => {
     expect(text).toContain("If it is missing, call device_open again.");
   });
 
+  it("starts with open, which creates the session, and records the device screen", () => {
+    const command = "/state/device/targets/t3-a/agent-device";
+    const text = agentDeviceQuickStart(device, [], command);
+    expect(text).toContain(
+      "Start with open <bundle-or-package-id>, or open alone for the home screen; the other commands need the session it starts:",
+    );
+    // App-scoped recording needs an app opened in the session; device scope works after a bare open.
+    expect(text).toContain(
+      `  ${command} record start --scope device /tmp/run.mp4  # then record stop`,
+    );
+  });
+
   it("reads PNG dimensions from the IHDR chunk", () => {
     const png = new Uint8Array(24);
     new DataView(png.buffer).setUint32(0, 0x89504e47);

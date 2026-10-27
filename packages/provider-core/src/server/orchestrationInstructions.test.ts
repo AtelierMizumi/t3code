@@ -24,6 +24,13 @@ describe("T3 device instructions", () => {
     );
   });
 
+  it("start the returned command with open, which creates the agent-device session the rest need", () => {
+    assert.include(
+      T3_CODE_DEVICE_TOOL_INSTRUCTIONS,
+      "Run that command, starting with `open <app>` (or `open` for the home screen), for every",
+    );
+  });
+
   it("reach OpenCode and Cursor only when the session holds device access", () => {
     assert.include(t3OrchestrationSystemPrompt(true, true), T3_CODE_DEVICE_TOOL_INSTRUCTIONS);
     assert.notInclude(t3OrchestrationSystemPrompt(true, false), "## T3 Code devices");

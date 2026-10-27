@@ -45,7 +45,9 @@ export function agentDeviceQuickStart(
     target === ""
       ? `Drive it with ${executable}. It is bound to this device and session, so it needs no --platform, --udid, --serial, --config or --session flags. Use this exact path; login shells may reset PATH.`
       : `Drive it with ${executable}. Use this exact path; login shells may reset PATH. Always pass ${target}.`,
-    "Every app launch, deep link, tap, text entry, alert, setting, screenshot and recording on this device goes through it:",
+    // agent-device creates the session on the agent's first open. device_open does not run open
+    // itself: on iOS that can start a minutes-long XCTest runner build.
+    "Every app launch, deep link, tap, text entry, alert, setting, screenshot and recording on this device goes through it. Start with open <bundle-or-package-id>, or open alone for the home screen; the other commands need the session it starts:",
     `  ${run("open <bundle-or-package-id> --relaunch")}  # restarts the app; Expo dev clients connect to their Metro, --metro-port <port> picks it`,
     `  ${run("open <bundle-or-package-id> <deep-link-url>")}`,
     `  ${run("snapshot -i")}  # accessibility tree with @eN refs`,
@@ -54,7 +56,7 @@ export function agentDeviceQuickStart(
     `  ${run("alert accept")}`,
     `  ${run("settings appearance dark")}  # also text-size, permission grant <name>`,
     `  ${run("screenshot /tmp/shot.png")}  # ${device.platform === "ios" ? "iOS saves 1x points; add --pixel-density <n> (3 on most iPhones) for device resolution, " : ""}or call device_screenshot to look`,
-    `  ${run("record start /tmp/run.mp4")}  # then record stop`,
+    `  ${run("record start --scope device /tmp/run.mp4")}  # then record stop`,
     `  ${run("install <app> <path-to-.app-or-.apk>")}`,
     `Prefer snapshot refs over coordinates. Run ${executable} help <command> for flags and ${executable} help workflow for guides.`,
     "Do not use simctl, idb, adb or ssh for those actions. They stay fine for builds, installs, code sync, Metro, port forwards, logs, test runners and what this command cannot do; come back to it for every UI action and screenshot so the user can watch.",
