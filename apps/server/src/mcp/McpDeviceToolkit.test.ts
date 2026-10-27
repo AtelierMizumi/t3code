@@ -214,6 +214,13 @@ it.effect("registers the device tools and returns the screenshot as image conten
         .callTool({ name: "device_list", arguments: {} })
         .pipe(callWith(["preview"]), Effect.provideService(McpSchema.McpServerClient, client));
       expect(denied.isError).toBe(true);
+      // The agent can't see Settings, so the error says where the user turns access on.
+      expect(denied.content).toEqual([
+        {
+          type: "text",
+          text: "Agent device access is turned off for this environment. Ask the user to turn on Agent device access in Settings > Integrations > Devices.",
+        },
+      ]);
     }),
   ).pipe(Effect.provide(layerTest)),
 );
