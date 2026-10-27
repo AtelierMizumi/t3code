@@ -31,6 +31,14 @@ describe("T3 device instructions", () => {
     );
   });
 
+  it("keep the failure rule from taking over or closing a session another thread holds", () => {
+    // agent-device's DEVICE_IN_USE advice is to rerun with the owner's --session or close it first.
+    assert.include(
+      T3_CODE_DEVICE_TOOL_INSTRUCTIONS,
+      "follow its advice once, but never reuse or close another session; if it still fails,",
+    );
+  });
+
   it("reach OpenCode and Cursor only when the session holds device access", () => {
     assert.include(t3OrchestrationSystemPrompt(true, true), T3_CODE_DEVICE_TOOL_INSTRUCTIONS);
     assert.notInclude(t3OrchestrationSystemPrompt(true, false), "## T3 Code devices");
