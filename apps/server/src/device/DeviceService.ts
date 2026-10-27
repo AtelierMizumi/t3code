@@ -5,8 +5,8 @@ import {
   type DeviceDetail,
   type DeviceDetailInput,
   type DeviceError,
-  type DeviceHostId,
-  type DeviceId,
+  DeviceHostId,
+  DeviceId,
   DeviceHostUnavailableError,
   DeviceNotFoundError,
   DeviceOperationError,
@@ -51,6 +51,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
@@ -105,6 +106,27 @@ export interface DeviceReadiness extends DeviceHost.DeviceHostReady {
 export interface DeviceAgentReadiness extends DeviceReadiness {
   /** Null when each device has its own daemon; see `DeviceOperations.agentEndpoint`. */
   readonly agentDevice: DeviceHost.AgentDeviceEndpoint | null;
+}
+
+const DeviceHostName = Schema.Struct({ id: DeviceHostId, label: Schema.optional(Schema.String) });
+const hostName = (host: typeof DeviceHostName.Type) => host.label ?? `host ${host.id}`;
+
+export class DeviceHostAmbiguousError extends Schema.TaggedError<DeviceHostAmbiguousError>()(
+  "DeviceHostAmbiguousError",
+  { deviceId: DeviceId, hosts: Schema.Array(DeviceHostName) },
+) {
+  override get message(): string {
+    return `Device ${this.deviceId} is on more than one host: ${this.hosts.map(hostName).join(", ")}.`;
+  }
+}
+
+export class DeviceOnOtherHostError extends Schema.TaggedError<DeviceOnOtherHostError>()(
+  "DeviceOnOtherHostError",
+  { deviceId: DeviceId, host: DeviceHostName, hosts: Schema.Array(DeviceHostName) },
+) {
+  override get message(): string {
+    return `Device ${this.deviceId} is not on ${hostName(this.host)}. It is on ${this.hosts.map(hostName).join(", ")}.`;
+  }
 }
 
 export class DeviceService extends Context.Service<
@@ -164,6 +186,27 @@ export class DeviceService extends Context.Service<
       readonly hostId?: DeviceHostId | undefined;
       readonly deviceId: DeviceId;
     }) => Effect.Effect<DeviceScreenshot, DeviceError>;
+    /**
+     * The device an id names in the last listing. Ids are unique per host, not across hosts (an
+     * Android AVD name can exist on two), so a hostId decides, and without one the id has to be
+     * on a single host.
+     */
+    readonly locateDevice: (input: {
+      readonly hostId?: DeviceHostId | undefined;
+      readonly deviceId: DeviceId;
+    }) => Effect.Effect<
+      Option.Option<DeviceSummary>,
+      DeviceHostAmbiguousError | DeviceOnOtherHostError
+    >;
+    /** As `locateDevice`, among the devices a thread has open. */
+    readonly locateSession: (input: {
+      readonly threadId: ThreadId;
+      readonly hostId?: DeviceHostId | undefined;
+      readonly deviceId: DeviceId;
+    }) => Effect.Effect<
+      Option.Option<DeviceSession>,
+      DeviceHostAmbiguousError | DeviceOnOtherHostError
+    >;
     readonly readiness: (hostId?: DeviceHostId) => Effect.Effect<DeviceReadiness, DeviceError>;
     readonly readinessIfSupported: (
       hostId?: DeviceHostId,
@@ -851,6 +894,61 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
       Effect.map(({ state }) => state.sessions.filter((session) => session.threadId === threadId)),
     );
 
+  const locate = <T extends { readonly hostId: DeviceHostId }>(
+    state: DeviceServiceState,
+    input: { readonly hostId?: DeviceHostId | undefined; readonly deviceId: DeviceId },
+    matches: ReadonlyArray<T>,
+  ): Effect.Effect<Option.Option<T>, DeviceHostAmbiguousError | DeviceOnOtherHostError> => {
+    const named = (id: DeviceHostId) => ({
+      id,
+      label: state.hosts.find((host) => host.id === id)?.label,
+    });
+    const onHost = matches.filter(
+      (match) => input.hostId === undefined || match.hostId === input.hostId,
+    );
+    const hostIds = [...new Set(onHost.map((match) => match.hostId))];
+    if (hostIds.length === 1) return Effect.succeedSome(onHost.at(-1)!);
+    if (hostIds.length > 1) {
+      return Effect.fail(
+        new DeviceHostAmbiguousError({ deviceId: input.deviceId, hosts: hostIds.map(named) }),
+      );
+    }
+    const elsewhere = [...new Set(matches.map((match) => match.hostId))];
+    return input.hostId !== undefined && elsewhere.length > 0
+      ? Effect.fail(
+          new DeviceOnOtherHostError({
+            deviceId: input.deviceId,
+            host: named(input.hostId),
+            hosts: elsewhere.map(named),
+          }),
+        )
+      : Effect.succeedNone;
+  };
+
+  const locateDevice: DeviceService["Service"]["locateDevice"] = Effect.fn(
+    "DeviceService.locateDevice",
+  )(function* (input) {
+    const { state } = yield* SynchronizedRef.get(stateRef);
+    return yield* locate(
+      state,
+      input,
+      state.devices.filter((device) => device.id === input.deviceId),
+    );
+  });
+
+  const locateSession: DeviceService["Service"]["locateSession"] = Effect.fn(
+    "DeviceService.locateSession",
+  )(function* (input) {
+    const { state } = yield* SynchronizedRef.get(stateRef);
+    return yield* locate(
+      state,
+      input,
+      state.sessions.filter(
+        (session) => session.threadId === input.threadId && session.deviceId === input.deviceId,
+      ),
+    );
+  });
+
   // Sessions live in memory, so this removes every launcher a previous run left behind.
   yield* pruneLaunchers;
 
@@ -964,6 +1062,8 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
       detail,
       action,
       screenshot,
+      locateDevice,
+      locateSession,
       readiness,
       readinessIfSupported,
       agentReadinessIfSupported,

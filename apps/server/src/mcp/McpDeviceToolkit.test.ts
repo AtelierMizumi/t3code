@@ -105,6 +105,13 @@ const layerProjectsMock = Layer.mock(ProjectService.ProjectService)({
   getById: () => Effect.succeedNone,
 });
 
+const openSession = {
+  threadId,
+  hostId: "local",
+  deviceId: DeviceId.make("UDID-1"),
+  platform: "ios" as const,
+  openedAt: "2026-09-08T00:00:00.000Z",
+};
 const layerDeviceServiceMock = Layer.mock(DeviceService.DeviceService)({
   state: Effect.succeed(state),
   list: Effect.succeed(state),
@@ -118,19 +125,12 @@ const layerDeviceServiceMock = Layer.mock(DeviceService.DeviceService)({
       openedAt: "2026-09-08T00:00:00.000Z",
     }),
 
-  sessionsForThread: (id) =>
+  sessionsForThread: (id) => Effect.succeed(id === threadId ? [openSession] : []),
+  locateSession: (input) =>
     Effect.succeed(
-      id === threadId
-        ? [
-            {
-              threadId,
-              hostId: "local",
-              deviceId: DeviceId.make("UDID-1"),
-              platform: "ios" as const,
-              openedAt: "2026-09-08T00:00:00.000Z",
-            },
-          ]
-        : [],
+      input.threadId === threadId && input.deviceId === openSession.deviceId
+        ? Option.some(openSession)
+        : Option.none(),
     ),
   screenshot: () => Effect.succeed({ device, png }),
   close: () => Effect.void,
@@ -300,6 +300,18 @@ describe("device targeting across hosts", () => {
     platform,
     openedAt: "2026-09-08T00:00:00.000Z",
   });
+  const thisMachine = { id: "local", label: "This machine" };
+  const macMini = { id: macHost.id, label: macHost.label };
+  // DeviceService's lookup errors; DeviceService.test.ts covers when each arises.
+  const onTwoHosts = new DeviceService.DeviceHostAmbiguousError({
+    deviceId: DeviceId.make("Pixel_10"),
+    hosts: [thisMachine, macMini],
+  });
+  const onTheMac = new DeviceService.DeviceOnOtherHostError({
+    deviceId: DeviceId.make("MAC-UDID"),
+    host: thisMachine,
+    hosts: [macMini],
+  });
 
   const run = <A, E>(
     sessions: ReadonlyArray<ReturnType<typeof session>>,
@@ -329,6 +341,26 @@ describe("device targeting across hosts", () => {
           return session(input.hostId ?? "local", input.deviceId, input.platform);
         }),
       sessionsForThread: () => Effect.succeed(sessions),
+      locateDevice: (input) =>
+        Effect.succeed(
+          Option.fromUndefinedOr(
+            multiHostState.devices.find(
+              (candidate) =>
+                candidate.id === input.deviceId &&
+                (input.hostId === undefined || candidate.hostId === input.hostId),
+            ),
+          ),
+        ),
+      locateSession: (input) =>
+        Effect.succeed(
+          Option.fromUndefinedOr(
+            sessions.find(
+              (candidate) =>
+                candidate.deviceId === input.deviceId &&
+                (input.hostId === undefined || candidate.hostId === input.hostId),
+            ),
+          ),
+        ),
       screenshot: (target) =>
         Effect.succeed({
           device:
@@ -429,23 +461,54 @@ describe("device targeting across hosts", () => {
   );
 
   it.effect("refuses a device id that exists on two hosts and names both", () =>
-    run([], ({ opened, call }) =>
-      Effect.gen(function* () {
-        const result = yield* call("device_open", { deviceId: "Pixel_10" });
-        expect(result.isError).toBe(true);
-        expect(text(result)).toContain("hostId local");
-        expect(text(result)).toContain("hostId mac-mini");
-        expect(opened).toEqual([]);
-      }),
+    run(
+      [],
+      ({ opened, call }) =>
+        Effect.gen(function* () {
+          const result = yield* call("device_open", { deviceId: "Pixel_10" });
+          expect(result.isError).toBe(true);
+          expect(text(result)).toContain("hostId local");
+          expect(text(result)).toContain("hostId mac-mini");
+          expect(text(result)).toBe(
+            "Device Pixel_10 is on more than one host: 'This machine' (hostId local), 'Mac Mini' (hostId mac-mini). Pass hostId.",
+          );
+          expect(opened).toEqual([]);
+        }),
+      { locateDevice: () => Effect.fail(onTwoHosts) },
     ),
   );
 
   it.effect("keeps an explicit hostId and says which host has the device", () =>
+    run(
+      [],
+      ({ opened, call }) =>
+        Effect.gen(function* () {
+          const result = yield* call("device_open", { deviceId: "MAC-UDID", hostId: "local" });
+          expect(result.isError).toBe(true);
+          expect(text(result)).toContain("hostId mac-mini");
+          expect(text(result)).toBe(
+            "Device MAC-UDID is not on 'This machine' (hostId local). It is on 'Mac Mini' (hostId mac-mini); pass that hostId.",
+          );
+          expect(opened).toEqual([]);
+        }),
+      { locateDevice: () => Effect.fail(onTheMac) },
+    ),
+  );
+
+  it.effect("says no host has a device id, naming the host it was asked on", () =>
     run([], ({ opened, call }) =>
       Effect.gen(function* () {
-        const result = yield* call("device_open", { deviceId: "MAC-UDID", hostId: "local" });
-        expect(result.isError).toBe(true);
-        expect(text(result)).toContain("hostId mac-mini");
+        const missing = (args: Record<string, unknown>) =>
+          call("device_open", { deviceId: "Pixel_9", ...args }).pipe(Effect.map(text));
+        expect(yield* missing({})).toBe(
+          "No device Pixel_9 on any host. Call device_list for current ids.",
+        );
+        expect(yield* missing({ hostId: "mac-mini" })).toBe(
+          "No device Pixel_9 on 'Mac Mini' (hostId mac-mini). Call device_list for current ids.",
+        );
+        expect(yield* missing({ hostId: "unknown-host" })).toBe(
+          "No device Pixel_9 on hostId unknown-host. Call device_list for current ids.",
+        );
         expect(opened).toEqual([]);
       }),
     ),
@@ -462,14 +525,32 @@ describe("device targeting across hosts", () => {
   );
 
   it.effect("says why device_screenshot failed instead of a generic error", () =>
-    run([session("mac-mini", "MAC-UDID", "ios")], ({ call }) =>
+    run(
+      [session("mac-mini", "MAC-UDID", "ios")],
+      ({ call }) =>
+        Effect.gen(function* () {
+          const wrongHost = yield* call("device_screenshot", {
+            deviceId: "MAC-UDID",
+            hostId: "local",
+          });
+          expect(wrongHost.isError).toBe(true);
+          expect(text(wrongHost)).toContain("It is on 'Mac Mini' (hostId mac-mini)");
+          expect(text(wrongHost)).toBe(
+            "Device MAC-UDID is not on 'This machine' (hostId local). It is on 'Mac Mini' (hostId mac-mini); pass that hostId.",
+          );
+        }),
+      { locateSession: () => Effect.fail(onTheMac) },
+    ),
+  );
+
+  it.effect("tells an agent to open a device id before screenshotting it", () =>
+    run([], ({ call }) =>
       Effect.gen(function* () {
-        const wrongHost = yield* call("device_screenshot", {
-          deviceId: "MAC-UDID",
-          hostId: "local",
-        });
-        expect(wrongHost.isError).toBe(true);
-        expect(text(wrongHost)).toContain("It is on 'Mac Mini' (hostId mac-mini)");
+        const result = yield* call("device_screenshot", { deviceId: "MAC-UDID" });
+        expect(result.isError).toBe(true);
+        expect(text(result)).toBe(
+          "Device MAC-UDID is not open in this thread. Call device_open first.",
+        );
       }),
     ),
   );
@@ -495,8 +576,25 @@ describe("device targeting across hosts", () => {
           const result = yield* call("device_close", { deviceId: "Pixel_10" });
           expect(result.isError).toBe(true);
           expect(text(result)).toContain("hostId mac-mini");
+          expect(text(result)).toBe(
+            "Device Pixel_10 is on more than one host: 'This machine' (hostId local), 'Mac Mini' (hostId mac-mini). Pass hostId.",
+          );
           expect(closed).toEqual([]);
         }),
+      { locateSession: () => Effect.fail(onTwoHosts) },
+    ),
+  );
+
+  it.effect("closes an open device on its host and treats an unopened one as closed", () =>
+    run([session("mac-mini", "MAC-UDID", "ios")], ({ closed, call }) =>
+      Effect.gen(function* () {
+        expect((yield* call("device_close", { deviceId: "MAC-UDID" })).isError).toBe(false);
+        expect((yield* call("device_close", { deviceId: "Pixel_9" })).isError).toBe(false);
+        expect(closed).toEqual([
+          { hostId: "mac-mini", deviceId: "MAC-UDID" },
+          { hostId: undefined, deviceId: "Pixel_9" },
+        ]);
+      }),
     ),
   );
 });
