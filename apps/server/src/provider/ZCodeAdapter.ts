@@ -15,17 +15,20 @@ import {
   type ZCodeSettings,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
+import { ChildProcessSpawner } from "effect/unstable/process";
 import { normalizeModelSlug } from "@t3tools/shared/model";
 
 import {
@@ -38,9 +41,11 @@ import { type ZCodeAdapterShape } from "../Services/ZCodeAdapter.ts";
 import {
   handleBuiltinZcodeServerRequest,
   mapRuntimeModeToZcodeMode,
+  rejectUnhandledZcodeServerRequest,
   startZcodeProtocolClient,
   zcodeCreateSession,
   zcodeResumeSession,
+  zcodeRuntimeErrorDetail,
   type ZcodeProtocolClient,
   type ZcodeServerRequest,
   type ZcodeSessionEvent,
@@ -57,12 +62,14 @@ export interface ZCodeAdapterLiveOptions {
 
 interface PendingApproval {
   readonly zcodeRequestId: number | string;
+  readonly turnId: TurnId | undefined;
   readonly decision: Deferred.Deferred<ProviderApprovalDecision>;
   readonly options: ReadonlyArray<{ readonly optionId: string; readonly kind: string }>;
 }
 
 interface PendingUserInput {
   readonly zcodeRequestId: number | string;
+  readonly turnId: TurnId | undefined;
   readonly resolution: Deferred.Deferred<
     | { readonly _tag: "answered"; readonly answers: ProviderUserInputAnswers }
     | { readonly _tag: "cancelled" }
@@ -79,19 +86,15 @@ interface ZcodeSessionContext {
   readonly pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
   turns: Array<{ id: TurnId; items: Array<unknown> }>;
   activeTurnId: TurnId | undefined;
-  interruptedTurnIds: Set<TurnId>;
+  interruptingTurnId: TurnId | undefined;
   currentModelId: string | undefined;
   currentProviderId: string | undefined;
   assistantItemStarted: boolean;
   stopped: boolean;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function parseZcodeResume(raw: unknown): { sessionId: string } | undefined {
-  if (!isRecord(raw)) return undefined;
+  if (!Predicate.isObject(raw)) return undefined;
   if (raw.schemaVersion !== ZCODE_RESUME_VERSION) return undefined;
   if (typeof raw.sessionId !== "string" || !raw.sessionId.trim()) return undefined;
   return { sessionId: raw.sessionId.trim() };
@@ -121,14 +124,14 @@ function toolItemType(
 function permissionOptions(
   params: unknown,
 ): ReadonlyArray<{ readonly optionId: string; readonly kind: string }> {
-  if (!isRecord(params) || !Array.isArray(params.options)) return [];
+  if (!Predicate.isObject(params) || !Array.isArray(params.options)) return [];
   return params.options.flatMap((option) => {
-    if (!isRecord(option) || typeof option.optionId !== "string") return [];
+    if (!Predicate.isObject(option) || typeof option.optionId !== "string") return [];
     return [{ optionId: option.optionId, kind: String(option.kind ?? "") }];
   });
 }
 
-function selectPermissionOptionId(
+export function selectZcodePermissionOptionId(
   options: ReadonlyArray<{ readonly optionId: string; readonly kind: string }>,
   decision: Exclude<ProviderApprovalDecision, "cancel">,
 ): string | undefined {
@@ -138,25 +141,17 @@ function selectPermissionOptionId(
       : decision === "accept"
         ? "allow_once"
         : "reject_once";
-  return (
-    options.find((option) => option.kind === kind)?.optionId ??
-    options.find((option) =>
-      decision === "reject"
-        ? option.kind.includes("deny") || option.kind.includes("reject")
-        : option.kind.includes("allow"),
-    )?.optionId ??
-    options[0]?.optionId
-  );
+  return options.find((option) => option.kind.trim().toLowerCase() === kind)?.optionId;
 }
 
 function userInputQuestions(params: unknown): ReadonlyArray<UserInputQuestion> {
-  if (!isRecord(params)) return [];
+  if (!Predicate.isObject(params)) return [];
   if (Array.isArray(params.questions)) {
     return params.questions.flatMap((question, index) => {
-      if (!isRecord(question) || typeof question.question !== "string") return [];
+      if (!Predicate.isObject(question) || typeof question.question !== "string") return [];
       const options = Array.isArray(question.options)
         ? question.options.flatMap((option) => {
-            if (!isRecord(option)) return [];
+            if (!Predicate.isObject(option)) return [];
             const label =
               typeof option.label === "string" ? option.label : String(option.value ?? "OK");
             return [
@@ -178,9 +173,9 @@ function userInputQuestions(params: unknown): ReadonlyArray<UserInputQuestion> {
       ];
     });
   }
-  if (isRecord(params.schema) && params.schema.interaction === "plan_approval") {
+  if (Predicate.isObject(params.schema) && params.schema.interaction === "plan_approval") {
     const plan =
-      isRecord(params.input) && typeof params.input.plan === "string"
+      Predicate.isObject(params.input) && typeof params.input.plan === "string"
         ? params.input.plan
         : "Approve this plan?";
     return [
@@ -203,11 +198,13 @@ export function makeZcodeAdapter(zcodeSettings: ZCodeSettings, options?: ZCodeAd
   return Effect.gen(function* () {
     const boundInstanceId = options?.instanceId ?? ProviderInstanceId.make("zcode");
     const crypto = yield* Crypto.Crypto;
+    const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const sessions = new Map<ThreadId, ZcodeSessionContext>();
     const threadLocksRef = yield* SynchronizedRef.make(new Map<string, Semaphore.Semaphore>());
     const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
 
-    const runtimeContext = yield* Effect.context<Crypto.Crypto | Clock.Clock>();
+    const clock = yield* Clock.Clock;
+    const runtimeContext = Context.add(yield* Effect.context<Crypto.Crypto>(), Clock.Clock, clock);
     const runFork = Effect.runForkWith(runtimeContext);
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
     const randomUUIDv4 = crypto.randomUUIDv4.pipe(
@@ -246,7 +243,9 @@ export function makeZcodeAdapter(zcodeSettings: ZCodeSettings, options?: ZCodeAd
     const withThreadLock = <A, E, R>(threadId: string, effect: Effect.Effect<A, E, R>) =>
       Effect.flatMap(getThreadSemaphore(threadId), (semaphore) => semaphore.withPermit(effect));
 
-    const requireSession = (threadId: ThreadId) => {
+    const requireSession = (
+      threadId: ThreadId,
+    ): Effect.Effect<ZcodeSessionContext, ProviderAdapterSessionNotFoundError> => {
       const ctx = sessions.get(threadId);
       if (!ctx || ctx.stopped) {
         return Effect.fail(
@@ -260,9 +259,9 @@ export function makeZcodeAdapter(zcodeSettings: ZCodeSettings, options?: ZCodeAd
       Effect.gen(function* () {
         if (event.sessionId !== ctx.zcodeSessionId) return;
         const turnId = ctx.activeTurnId;
-        if (turnId !== undefined && ctx.interruptedTurnIds.has(turnId)) return;
+        if (turnId !== undefined && ctx.interruptingTurnId === turnId) return;
         const stamp = yield* makeEventStamp();
-        const payload = isRecord(event.payload) ? event.payload : {};
+        const payload = Predicate.isObject(event.payload) ? event.payload : {};
 
         switch (event.type) {
           case "turn.started":
@@ -296,9 +295,10 @@ export function makeZcodeAdapter(zcodeSettings: ZCodeSettings, options?: ZCodeAd
                   payload: { itemType: "assistant_message", status: "inProgress" },
                 });
               }
+              const contentStamp = yield* makeEventStamp();
               yield* offerRuntimeEvent({
                 type: "content.delta",
-                ...stamp,
+                ...contentStamp,
                 provider: PROVIDER,
                 threadId: ctx.threadId,
                 turnId,
@@ -312,7 +312,11 @@ export function makeZcodeAdapter(zcodeSettings: ZCodeSettings, options?: ZCodeAd
           case "tool.updated": {
             if (!turnId) return;
             const toolCallId =
-              typeof payload.toolCallId === "string" ? payload.toolCallId : yield* randomUUIDv4;
+              typeof payload.toolCallId === "string" ? payload.toolCallId.trim() : "";
+            if (!toolCallId) {
+              yield* Effect.logWarning("Ignored malformed ZCode tool update without toolCallId.");
+              return;
+            }
             const toolName = typeof payload.toolName === "string" ? payload.toolName : "tool";
             const kind = typeof payload.kind === "string" ? payload.kind : "started";
             const completed = kind === "result" || kind === "error" || kind === "batch";
@@ -331,7 +335,7 @@ export function makeZcodeAdapter(zcodeSettings: ZCodeSettings, options?: ZCodeAd
                 itemType: toolItemType(toolName),
                 status: kind === "error" ? "failed" : completed ? "completed" : "inProgress",
                 title: toolName,
-                ...(isRecord(payload.input) ? { data: payload.input } : {}),
+                ...(Predicate.isObject(payload.input) ? { data: payload.input } : {}),
               },
               raw: { source: "zcode.protocol.event", method: event.type, payload: event.payload },
             });
@@ -361,7 +365,8 @@ export function makeZcodeAdapter(zcodeSettings: ZCodeSettings, options?: ZCodeAd
                 ...(failed
                   ? {
                       errorMessage:
-                        isRecord(payload.error) && typeof payload.error.message === "string"
+                        Predicate.isObject(payload.error) &&
+                        typeof payload.error.message === "string"
                           ? payload.error.message
                           : "ZCode turn failed.",
                     }
@@ -392,10 +397,11 @@ export function makeZcodeAdapter(zcodeSettings: ZCodeSettings, options?: ZCodeAd
           const options = permissionOptions(request.params);
           ctx.pendingApprovals.set(requestId, {
             zcodeRequestId: request.id,
+            turnId: ctx.activeTurnId,
             decision,
             options,
           });
-          const params = isRecord(request.params) ? request.params : {};
+          const params = Predicate.isObject(request.params) ? request.params : {};
           yield* offerRuntimeEvent({
             type: "request.opened",
             ...(yield* makeEventStamp()),
@@ -428,6 +434,7 @@ export function makeZcodeAdapter(zcodeSettings: ZCodeSettings, options?: ZCodeAd
           >();
           ctx.pendingUserInputs.set(requestId, {
             zcodeRequestId: request.id,
+            turnId: ctx.activeTurnId,
             resolution,
           });
           yield* offerRuntimeEvent({
@@ -446,7 +453,7 @@ export function makeZcodeAdapter(zcodeSettings: ZCodeSettings, options?: ZCodeAd
           });
           return;
         }
-        ctx.client.reply(request.id, {});
+        rejectUnhandledZcodeServerRequest(ctx.client, request);
       }).pipe(
         Effect.catch((cause) =>
           Effect.logError("Failed to handle ZCode server request.", {
@@ -456,16 +463,47 @@ export function makeZcodeAdapter(zcodeSettings: ZCodeSettings, options?: ZCodeAd
         ),
       );
 
+    const settlePendingInteractions = (ctx: ZcodeSessionContext) =>
+      Effect.gen(function* () {
+        const approvals = [...ctx.pendingApprovals.entries()];
+        const userInputs = [...ctx.pendingUserInputs.entries()];
+        ctx.pendingApprovals.clear();
+        ctx.pendingUserInputs.clear();
+
+        for (const [requestId, pending] of approvals) {
+          yield* Deferred.succeed(pending.decision, "cancel").pipe(Effect.ignore);
+          ctx.client.reply(pending.zcodeRequestId, { outcome: { outcome: "cancelled" } });
+          yield* offerRuntimeEvent({
+            type: "request.resolved",
+            ...(yield* makeEventStamp()),
+            provider: PROVIDER,
+            threadId: ctx.threadId,
+            turnId: pending.turnId,
+            requestId: RuntimeRequestId.make(requestId),
+            payload: { requestType: "exec_command_approval", decision: "cancel" },
+          });
+        }
+
+        for (const [requestId, pending] of userInputs) {
+          yield* Deferred.succeed(pending.resolution, { _tag: "cancelled" }).pipe(Effect.ignore);
+          ctx.client.reply(pending.zcodeRequestId, { answers: {} });
+          yield* offerRuntimeEvent({
+            type: "user-input.resolved",
+            ...(yield* makeEventStamp()),
+            provider: PROVIDER,
+            threadId: ctx.threadId,
+            turnId: pending.turnId,
+            requestId: RuntimeRequestId.make(requestId),
+            payload: { answers: {} },
+          });
+        }
+      });
+
     const stopSessionInternal = (ctx: ZcodeSessionContext) =>
       Effect.gen(function* () {
         if (ctx.stopped) return;
         ctx.stopped = true;
-        for (const pending of ctx.pendingApprovals.values()) {
-          yield* Deferred.succeed(pending.decision, "cancel").pipe(Effect.ignore);
-        }
-        for (const pending of ctx.pendingUserInputs.values()) {
-          yield* Deferred.succeed(pending.resolution, { _tag: "cancelled" }).pipe(Effect.ignore);
-        }
+        yield* settlePendingInteractions(ctx);
         sessions.delete(ctx.threadId);
         yield* Effect.ignore(Scope.close(ctx.scope, Exit.void));
         yield* offerRuntimeEvent({
@@ -478,10 +516,14 @@ export function makeZcodeAdapter(zcodeSettings: ZCodeSettings, options?: ZCodeAd
       });
 
     yield* Effect.addFinalizer(() =>
-      Effect.forEach([...sessions.values()], stopSessionInternal, {
-        concurrency: "unbounded",
-        discard: true,
-      }),
+      Effect.forEach(
+        [...sessions.values()],
+        (ctx) => stopSessionInternal(ctx).pipe(Effect.ignore),
+        {
+          concurrency: "unbounded",
+          discard: true,
+        },
+      ),
     );
 
     const startSession: ZCodeAdapterShape["startSession"] = (input) =>
@@ -517,15 +559,16 @@ export function makeZcodeAdapter(zcodeSettings: ZCodeSettings, options?: ZCodeAd
           const client = yield* startZcodeProtocolClient({
             binaryPath: zcodeSettings.binaryPath,
             cwd,
-            environment: options?.environment,
+            ...(options?.environment ? { environment: options.environment } : {}),
           }).pipe(
             Effect.provideService(Scope.Scope, sessionScope),
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
             Effect.mapError(
               (cause) =>
                 new ProviderAdapterProcessError({
                   provider: PROVIDER,
                   threadId: input.threadId,
-                  detail: cause.message,
+                  detail: zcodeRuntimeErrorDetail(cause),
                   cause,
                 }),
             ),
@@ -542,7 +585,9 @@ export function makeZcodeAdapter(zcodeSettings: ZCodeSettings, options?: ZCodeAd
           client.setServerRequestHandler((request) => {
             const ctx = ctxHolder.current;
             if (!ctx) {
-              handleBuiltinZcodeServerRequest(client, request);
+              if (!handleBuiltinZcodeServerRequest(client, request)) {
+                rejectUnhandledZcodeServerRequest(client, request);
+              }
               return;
             }
             if (handleBuiltinZcodeServerRequest(client, request)) return;
@@ -559,7 +604,7 @@ export function makeZcodeAdapter(zcodeSettings: ZCodeSettings, options?: ZCodeAd
                   cwd,
                   mode: mapRuntimeModeToZcodeMode(input.runtimeMode, undefined),
                   modelId: requestedModel,
-                  providerId: desktopPlan?.providerId,
+                  ...(desktopPlan?.providerId ? { providerId: desktopPlan.providerId } : {}),
                 })
           ).pipe(
             Effect.mapError(
@@ -567,12 +612,13 @@ export function makeZcodeAdapter(zcodeSettings: ZCodeSettings, options?: ZCodeAd
                 new ProviderAdapterProcessError({
                   provider: PROVIDER,
                   threadId: input.threadId,
-                  detail: cause.message,
+                  detail: zcodeRuntimeErrorDetail(cause),
                   cause,
                 }),
             ),
           );
 
+          const providerId = created.providerId ?? desktopPlan?.providerId;
           if (created.modelId && created.modelId !== requestedModel) {
             yield* Effect.tryPromise({
               try: () =>
@@ -580,17 +626,17 @@ export function makeZcodeAdapter(zcodeSettings: ZCodeSettings, options?: ZCodeAd
                   sessionId: created.sessionId,
                   model: {
                     modelId: requestedModel,
-                    ...(desktopPlan?.providerId ? { providerId: desktopPlan.providerId } : {}),
+                    ...(providerId ? { providerId } : {}),
                   },
                 }),
               catch: (cause) =>
                 new ProviderAdapterRequestError({
                   provider: PROVIDER,
                   method: "session/setModel",
-                  detail: cause instanceof Error ? cause.message : String(cause),
+                  detail: zcodeRuntimeErrorDetail(cause),
                   cause,
                 }),
-            }).pipe(Effect.ignore);
+            });
           }
 
           const now = yield* nowIso;
@@ -600,7 +646,7 @@ export function makeZcodeAdapter(zcodeSettings: ZCodeSettings, options?: ZCodeAd
             status: "ready",
             runtimeMode: input.runtimeMode,
             cwd,
-            model: created.modelId ?? requestedModel,
+            model: requestedModel,
             threadId: input.threadId,
             resumeCursor: {
               schemaVersion: ZCODE_RESUME_VERSION,
@@ -619,9 +665,9 @@ export function makeZcodeAdapter(zcodeSettings: ZCodeSettings, options?: ZCodeAd
             pendingUserInputs,
             turns: [],
             activeTurnId: undefined,
-            interruptedTurnIds: new Set(),
-            currentModelId: created.modelId ?? requestedModel,
-            currentProviderId: created.providerId ?? desktopPlan?.providerId,
+            interruptingTurnId: undefined,
+            currentModelId: requestedModel,
+            currentProviderId: providerId,
             assistantItemStarted: false,
             stopped: false,
           };
@@ -659,31 +705,24 @@ export function makeZcodeAdapter(zcodeSettings: ZCodeSettings, options?: ZCodeAd
         input.threadId,
         Effect.gen(function* () {
           const ctx = yield* requireSession(input.threadId);
-          const turnId = ctx.activeTurnId ?? TurnId.make(yield* randomUUIDv4);
-          ctx.activeTurnId = turnId;
-          ctx.assistantItemStarted = false;
-          ctx.session = {
-            ...ctx.session,
-            status: "running",
-            activeTurnId: turnId,
-            updatedAt: yield* nowIso,
-          };
-          if (input.interactionMode === "plan") {
-            yield* Effect.tryPromise({
-              try: () =>
-                ctx.client.request("session/setMode", {
-                  sessionId: ctx.zcodeSessionId,
-                  mode: "plan",
-                }),
-              catch: (cause) =>
-                new ProviderAdapterRequestError({
-                  provider: PROVIDER,
-                  method: "session/setMode",
-                  detail: cause instanceof Error ? cause.message : String(cause),
-                  cause,
-                }),
-            }).pipe(Effect.ignore);
-          }
+          const steeringTurnId = ctx.activeTurnId;
+          const turnId = steeringTurnId ?? TurnId.make(yield* randomUUIDv4);
+          const mode = mapRuntimeModeToZcodeMode(ctx.session.runtimeMode, input.interactionMode);
+          yield* Effect.tryPromise({
+            try: () =>
+              ctx.client.request("session/setMode", {
+                sessionId: ctx.zcodeSessionId,
+                mode,
+              }),
+            catch: (cause) =>
+              new ProviderAdapterRequestError({
+                provider: PROVIDER,
+                method: "session/setMode",
+                detail: zcodeRuntimeErrorDetail(cause),
+                cause,
+              }),
+          });
+
           const requestedModel = input.modelSelection?.model
             ? resolveZcodeModelId(input.modelSelection.model)
             : undefined;
@@ -701,22 +740,33 @@ export function makeZcodeAdapter(zcodeSettings: ZCodeSettings, options?: ZCodeAd
                 new ProviderAdapterRequestError({
                   provider: PROVIDER,
                   method: "session/setModel",
-                  detail: cause instanceof Error ? cause.message : String(cause),
+                  detail: zcodeRuntimeErrorDetail(cause),
                   cause,
                 }),
-            }).pipe(Effect.ignore);
+            });
             ctx.currentModelId = requestedModel;
             ctx.session = { ...ctx.session, model: requestedModel };
           }
 
-          yield* offerRuntimeEvent({
-            type: "turn.started",
-            ...(yield* makeEventStamp()),
-            provider: PROVIDER,
-            threadId: input.threadId,
-            turnId,
-            payload: ctx.currentModelId ? { model: ctx.currentModelId } : {},
-          });
+          if (steeringTurnId === undefined) {
+            const { lastError: _clearedError, ...sessionWithoutError } = ctx.session;
+            ctx.activeTurnId = turnId;
+            ctx.assistantItemStarted = false;
+            ctx.session = {
+              ...sessionWithoutError,
+              status: "running",
+              activeTurnId: turnId,
+              updatedAt: yield* nowIso,
+            };
+            yield* offerRuntimeEvent({
+              type: "turn.started",
+              ...(yield* makeEventStamp()),
+              provider: PROVIDER,
+              threadId: input.threadId,
+              turnId,
+              payload: ctx.currentModelId ? { model: ctx.currentModelId } : {},
+            });
+          }
 
           yield* Effect.tryPromise({
             try: () =>
@@ -728,10 +778,34 @@ export function makeZcodeAdapter(zcodeSettings: ZCodeSettings, options?: ZCodeAd
               new ProviderAdapterRequestError({
                 provider: PROVIDER,
                 method: "session/send",
-                detail: cause instanceof Error ? cause.message : String(cause),
+                detail: zcodeRuntimeErrorDetail(cause),
                 cause,
               }),
-          });
+          }).pipe(
+            Effect.tapError((requestError) =>
+              steeringTurnId !== undefined
+                ? Effect.void
+                : Effect.gen(function* () {
+                    const { activeTurnId: _clearedTurn, ...readySession } = ctx.session;
+                    ctx.activeTurnId = undefined;
+                    ctx.assistantItemStarted = false;
+                    ctx.session = {
+                      ...readySession,
+                      status: "ready",
+                      lastError: requestError.detail,
+                      updatedAt: yield* nowIso,
+                    };
+                    yield* offerRuntimeEvent({
+                      type: "turn.aborted",
+                      ...(yield* makeEventStamp()),
+                      provider: PROVIDER,
+                      threadId: input.threadId,
+                      turnId,
+                      payload: { reason: requestError.detail },
+                    });
+                  }),
+            ),
+          );
 
           ctx.turns = [...ctx.turns, { id: turnId, items: [{ prompt: input.input }] }];
           return {
@@ -743,32 +817,54 @@ export function makeZcodeAdapter(zcodeSettings: ZCodeSettings, options?: ZCodeAd
       );
 
     const interruptTurn: ZCodeAdapterShape["interruptTurn"] = (threadId, turnId) =>
-      Effect.gen(function* () {
-        const ctx = sessions.get(threadId);
-        if (!ctx || ctx.stopped) return;
-        const activeTurnId = ctx.activeTurnId ?? ctx.session.activeTurnId;
-        if (turnId !== undefined && activeTurnId !== undefined && activeTurnId !== turnId) {
-          return;
-        }
-        const interruptedTurnId = turnId ?? activeTurnId;
-        if (interruptedTurnId !== undefined) {
-          ctx.interruptedTurnIds.add(interruptedTurnId);
-        }
-        ctx.client.notify("session/stop", { sessionId: ctx.zcodeSessionId });
-        if (interruptedTurnId) {
-          const { activeTurnId: _cleared, ...readySession } = ctx.session;
-          ctx.activeTurnId = undefined;
-          ctx.session = { ...readySession, status: "ready", updatedAt: yield* nowIso };
-          yield* offerRuntimeEvent({
-            type: "turn.completed",
-            ...(yield* makeEventStamp()),
-            provider: PROVIDER,
-            threadId,
-            turnId: interruptedTurnId,
-            payload: { state: "cancelled" },
-          });
-        }
-      });
+      withThreadLock(
+        threadId,
+        Effect.gen(function* () {
+          const ctx = sessions.get(threadId);
+          if (!ctx || ctx.stopped) return;
+          const activeTurnId = ctx.activeTurnId ?? ctx.session.activeTurnId;
+          if (turnId !== undefined && activeTurnId !== undefined && activeTurnId !== turnId) {
+            return;
+          }
+          const interruptedTurnId = turnId ?? activeTurnId;
+          ctx.interruptingTurnId = interruptedTurnId;
+          yield* Effect.tryPromise({
+            try: () =>
+              ctx.client.request("session/stop", {
+                sessionId: ctx.zcodeSessionId,
+              }),
+            catch: (cause) =>
+              new ProviderAdapterRequestError({
+                provider: PROVIDER,
+                method: "session/stop",
+                detail: zcodeRuntimeErrorDetail(cause),
+                cause,
+              }),
+          }).pipe(
+            Effect.tapError(() =>
+              Effect.sync(() => {
+                ctx.interruptingTurnId = undefined;
+              }),
+            ),
+          );
+          yield* settlePendingInteractions(ctx);
+          if (interruptedTurnId) {
+            const { activeTurnId: _cleared, ...readySession } = ctx.session;
+            ctx.activeTurnId = undefined;
+            ctx.assistantItemStarted = false;
+            ctx.session = { ...readySession, status: "ready", updatedAt: yield* nowIso };
+            yield* offerRuntimeEvent({
+              type: "turn.aborted",
+              ...(yield* makeEventStamp()),
+              provider: PROVIDER,
+              threadId,
+              turnId: interruptedTurnId,
+              payload: { reason: "Interrupted by user." },
+            });
+          }
+          ctx.interruptingTurnId = undefined;
+        }),
+      );
 
     const respondToRequest: ZCodeAdapterShape["respondToRequest"] = (
       threadId,
@@ -780,15 +876,19 @@ export function makeZcodeAdapter(zcodeSettings: ZCodeSettings, options?: ZCodeAd
         const pending = ctx.pendingApprovals.get(requestId);
         if (!pending) return;
         ctx.pendingApprovals.delete(requestId);
-        yield* Deferred.succeed(pending.decision, decision).pipe(Effect.ignore);
-        if (decision === "cancel") {
+        const optionId =
+          decision === "cancel"
+            ? undefined
+            : selectZcodePermissionOptionId(pending.options, decision);
+        const resolvedDecision = decision === "cancel" || !optionId ? "cancel" : decision;
+        yield* Deferred.succeed(pending.decision, resolvedDecision).pipe(Effect.ignore);
+        if (resolvedDecision === "cancel" || !optionId) {
           ctx.client.reply(pending.zcodeRequestId, {
             outcome: { outcome: "cancelled" },
           });
         } else {
-          const optionId = selectPermissionOptionId(pending.options, decision);
           ctx.client.reply(pending.zcodeRequestId, {
-            outcome: optionId ? { outcome: "selected", optionId } : { outcome: "cancelled" },
+            outcome: { outcome: "selected", optionId },
           });
         }
         yield* offerRuntimeEvent({
@@ -796,9 +896,9 @@ export function makeZcodeAdapter(zcodeSettings: ZCodeSettings, options?: ZCodeAd
           ...(yield* makeEventStamp()),
           provider: PROVIDER,
           threadId,
-          turnId: ctx.activeTurnId,
+          turnId: pending.turnId,
           requestId: RuntimeRequestId.make(requestId),
-          payload: { requestType: "exec_command_approval", decision },
+          payload: { requestType: "exec_command_approval", decision: resolvedDecision },
         });
       });
 
@@ -821,7 +921,7 @@ export function makeZcodeAdapter(zcodeSettings: ZCodeSettings, options?: ZCodeAd
           ...(yield* makeEventStamp()),
           provider: PROVIDER,
           threadId,
-          turnId: ctx.activeTurnId,
+          turnId: pending.turnId,
           requestId: RuntimeRequestId.make(requestId),
           payload: { answers },
         });

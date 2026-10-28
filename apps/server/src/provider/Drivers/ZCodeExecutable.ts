@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - ZCode discovery is a synchronous Node executable boundary.
 /**
  * Resolve the official ZCode CLI entry (`zcode.cjs` from the desktop app).
  *
@@ -8,8 +9,8 @@
  *
  * @module provider/Drivers/ZCodeExecutable
  */
-import * as NodeFs from "node:fs";
-import * as NodeOs from "node:os";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 const ZCODE_CJS_BASENAME = "zcode.cjs";
@@ -17,25 +18,31 @@ const ZCODE_CJS_BASENAME = "zcode.cjs";
 function existingFile(path: string | undefined): string | undefined {
   if (!path) return undefined;
   try {
-    return NodeFs.statSync(path).isFile() ? path : undefined;
+    return NodeFS.statSync(path).isFile() ? path : undefined;
   } catch {
     return undefined;
   }
 }
 
 function looksLikeElectronLauncher(path: string): boolean {
+  let fileDescriptor: number | undefined;
   try {
-    const head = NodeFs.readFileSync(path, { encoding: "utf8" }).slice(0, 8_192);
+    fileDescriptor = NodeFS.openSync(path, "r");
+    const prefix = Buffer.alloc(8_192);
+    const bytesRead = NodeFS.readSync(fileDescriptor, prefix, 0, prefix.length, 0);
+    const head = prefix.toString("utf8", 0, bytesRead);
     return (
       head.includes("electron") || head.includes("ELECTRON_IS_DEV") || head.includes("app.asar")
     );
   } catch {
     return false;
+  } finally {
+    if (fileDescriptor !== undefined) NodeFS.closeSync(fileDescriptor);
   }
 }
 
 function siblingCjsFromLauncher(launcherPath: string): string | undefined {
-  const resolved = NodeFs.realpathSync.native(launcherPath);
+  const resolved = NodeFS.realpathSync.native(launcherPath);
   const dir = NodePath.dirname(resolved);
   const candidates = [
     NodePath.join(dir, "..", "lib", "zcode", "glm", ZCODE_CJS_BASENAME),
@@ -51,9 +58,9 @@ function siblingCjsFromLauncher(launcherPath: string): string | undefined {
   return undefined;
 }
 
-function wellKnownCjsPaths(): ReadonlyArray<string> {
-  const home = NodeOs.homedir();
-  const localAppData = process.env.LOCALAPPDATA?.trim();
+function wellKnownCjsPaths(env: NodeJS.ProcessEnv): ReadonlyArray<string> {
+  const home = NodeOS.homedir();
+  const localAppData = env.LOCALAPPDATA?.trim();
   return [
     "/usr/lib/zcode/glm/zcode.cjs",
     "/usr/lib/ZCode/glm/zcode.cjs",
@@ -75,14 +82,25 @@ function wellKnownCjsPaths(): ReadonlyArray<string> {
   ];
 }
 
-function whichOnPath(binary: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
+export function findZcodeOnPath(
+  binary: string,
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+): string | undefined {
   const pathEnv = env.PATH ?? env.Path;
   if (!pathEnv) return undefined;
-  const extensions = process.platform === "win32" ? ["", ".cmd", ".exe", ".bat"] : [""];
+  const extensions = platform === "win32" ? ["", ".cmd", ".exe", ".bat"] : [""];
   for (const dir of pathEnv.split(NodePath.delimiter)) {
     for (const extension of extensions) {
       const found = existingFile(NodePath.join(dir, `${binary}${extension}`));
-      if (found) return found;
+      if (!found) continue;
+      if (platform === "win32") return found;
+      try {
+        NodeFS.accessSync(found, NodeFS.constants.X_OK);
+        return found;
+      } catch {
+        continue;
+      }
     }
   }
   return undefined;
@@ -94,7 +112,8 @@ function whichOnPath(binary: string, env: NodeJS.ProcessEnv = process.env): stri
  */
 export function resolveZcodeCliPath(
   binaryPath: string | null | undefined,
-  env: NodeJS.ProcessEnv = process.env,
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
 ): string {
   const requested = binaryPath?.trim() || "zcode";
   const requestedFile = existingFile(requested);
@@ -118,12 +137,12 @@ export function resolveZcodeCliPath(
     return requested;
   }
 
-  for (const candidate of wellKnownCjsPaths()) {
+  for (const candidate of wellKnownCjsPaths(env)) {
     const found = existingFile(candidate);
     if (found) return found;
   }
 
-  const fromPath = whichOnPath(requested === "zcode" ? "zcode" : requested, env);
+  const fromPath = findZcodeOnPath(requested === "zcode" ? "zcode" : requested, env, platform);
   if (fromPath) {
     if (looksLikeElectronLauncher(fromPath)) {
       return siblingCjsFromLauncher(fromPath) ?? fromPath;
@@ -135,7 +154,8 @@ export function resolveZcodeCliPath(
 }
 
 export function isZcodeNodeBundle(path: string): boolean {
-  return path.endsWith(".cjs") || path.endsWith(".js") || path.endsWith(".mjs");
+  const extension = NodePath.extname(path).toLowerCase();
+  return extension === ".cjs" || extension === ".js" || extension === ".mjs";
 }
 
 export function resolveZcodeNodeBinary(env: NodeJS.ProcessEnv = process.env): string {
@@ -146,9 +166,10 @@ export function resolveZcodeNodeBinary(env: NodeJS.ProcessEnv = process.env): st
 
 export function buildZcodeAppServerArgv(input: {
   readonly binaryPath: string | null | undefined;
-  readonly env?: NodeJS.ProcessEnv;
+  readonly env: NodeJS.ProcessEnv;
+  readonly platform: NodeJS.Platform;
 }): { readonly command: string; readonly args: ReadonlyArray<string> } {
-  const cliPath = resolveZcodeCliPath(input.binaryPath, input.env);
+  const cliPath = resolveZcodeCliPath(input.binaryPath, input.env, input.platform);
   if (isZcodeNodeBundle(cliPath)) {
     return {
       command: resolveZcodeNodeBinary(input.env),

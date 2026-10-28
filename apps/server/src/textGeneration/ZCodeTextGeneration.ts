@@ -1,6 +1,8 @@
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { TextGenerationError, type ModelSelection, type ZCodeSettings } from "@t3tools/contracts";
 import { sanitizeFeatureBranchName } from "@t3tools/shared/git";
@@ -21,8 +23,10 @@ import {
 import { resolveZcodeModelId } from "../provider/Layers/ZCodeAdapter.ts";
 import {
   handleBuiltinZcodeServerRequest,
+  rejectUnhandledZcodeServerRequest,
   startZcodeProtocolClient,
   zcodeCreateSession,
+  zcodeRuntimeErrorDetail,
 } from "../provider/zcodeRuntime.ts";
 import { readZcodeDesktopPlan } from "../provider/zcodeDesktopAuth.ts";
 
@@ -33,6 +37,7 @@ export const makeZcodeTextGeneration = Effect.fn("makeZcodeTextGeneration")(func
   zcodeSettings: ZCodeSettings,
   environment: NodeJS.ProcessEnv = process.env,
 ) {
+  const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const runZcodeJson = <S extends Schema.Top>({
     operation,
     cwd,
@@ -52,6 +57,7 @@ export const makeZcodeTextGeneration = Effect.fn("makeZcodeTextGeneration")(func
   }): Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]> =>
     Effect.gen(function* () {
       let output = "";
+      let terminalFailure: string | undefined;
       let resolveDone: (() => void) | undefined;
       const donePromise = new Promise<void>((resolve) => {
         resolveDone = resolve;
@@ -61,28 +67,38 @@ export const makeZcodeTextGeneration = Effect.fn("makeZcodeTextGeneration")(func
         cwd,
         environment,
       }).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
         Effect.mapError(
           (cause) =>
             new TextGenerationError({
               operation,
-              detail: cause.message,
+              detail: zcodeRuntimeErrorDetail(cause),
               cause,
             }),
         ),
       );
 
       client.setServerRequestHandler((request) => {
-        handleBuiltinZcodeServerRequest(client, request);
+        if (!handleBuiltinZcodeServerRequest(client, request)) {
+          rejectUnhandledZcodeServerRequest(client, request);
+        }
       });
       client.setEventHandler((event) => {
         if (event.type === "model.streaming") {
-          const payload =
-            event.payload && typeof event.payload === "object"
-              ? (event.payload as Record<string, unknown>)
-              : {};
+          const payload = Predicate.isObject(event.payload) ? event.payload : {};
           if (payload.kind === "text_delta" && typeof payload.delta === "string") {
             output += payload.delta;
           }
+        }
+        if (event.type === "turn.failed") {
+          const payload = Predicate.isObject(event.payload) ? event.payload : {};
+          const error = Predicate.isObject(payload.error) ? payload.error : {};
+          terminalFailure =
+            typeof error.message === "string"
+              ? error.message
+              : typeof payload.message === "string"
+                ? payload.message
+                : "ZCode turn failed.";
         }
         if (
           event.type === "turn.completed" ||
@@ -98,13 +114,13 @@ export const makeZcodeTextGeneration = Effect.fn("makeZcodeTextGeneration")(func
         cwd,
         mode: "yolo",
         modelId: resolveZcodeModelId(modelSelection.model),
-        providerId: plan?.providerId,
+        ...(plan?.providerId ? { providerId: plan.providerId } : {}),
       }).pipe(
         Effect.mapError(
           (cause) =>
             new TextGenerationError({
               operation,
-              detail: cause.message,
+              detail: zcodeRuntimeErrorDetail(cause),
               cause,
             }),
         ),
@@ -119,7 +135,7 @@ export const makeZcodeTextGeneration = Effect.fn("makeZcodeTextGeneration")(func
         catch: (cause) =>
           new TextGenerationError({
             operation,
-            detail: cause instanceof Error ? cause.message : String(cause),
+            detail: zcodeRuntimeErrorDetail(cause),
             cause,
           }),
       });
@@ -136,6 +152,10 @@ export const makeZcodeTextGeneration = Effect.fn("makeZcodeTextGeneration")(func
           }),
         ),
       );
+
+      if (terminalFailure) {
+        return yield* new TextGenerationError({ operation, detail: terminalFailure });
+      }
 
       const trimmed = output.trim();
       if (!trimmed) {

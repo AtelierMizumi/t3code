@@ -5,12 +5,13 @@ import {
   type ZCodeSettings,
 } from "@t3tools/contracts";
 import { causeErrorTag } from "@t3tools/shared/observability";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import { HttpClient } from "effect/unstable/http";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess } from "effect/unstable/process";
 import { createModelCapabilities } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 
@@ -26,11 +27,7 @@ import {
   enrichProviderSnapshotWithVersionAdvisory,
   type ProviderMaintenanceCapabilities,
 } from "../providerMaintenance.ts";
-import {
-  buildZcodeAppServerArgv,
-  isZcodeNodeBundle,
-  resolveZcodeCliPath,
-} from "../Drivers/ZCodeExecutable.ts";
+import { buildZcodeAppServerArgv, isZcodeNodeBundle } from "../Drivers/ZCodeExecutable.ts";
 import { readZcodeDesktopPlan } from "../zcodeDesktopAuth.ts";
 
 const ZCODE_PRESENTATION = {
@@ -103,9 +100,11 @@ const runZcodeVersionCommand = (
   environment: NodeJS.ProcessEnv = process.env,
 ) =>
   Effect.gen(function* () {
+    const platform = yield* HostProcessPlatform;
     const argv = buildZcodeAppServerArgv({
       binaryPath: zcodeSettings.binaryPath,
       env: environment,
+      platform,
     });
     const versionArgs =
       argv.args[0] && isZcodeNodeBundle(argv.args[0]) ? [argv.args[0], "--version"] : ["--version"];
@@ -155,7 +154,6 @@ export const checkZcodeProviderStatus = Effect.fn("checkZcodeProviderStatus")(fu
     });
   }
 
-  const cliPath = resolveZcodeCliPath(zcodeSettings.binaryPath, environment);
   const versionResult = yield* runZcodeVersionCommand(zcodeSettings, environment).pipe(
     Effect.timeoutOption(VERSION_PROBE_TIMEOUT_MS),
     Effect.result,
@@ -202,19 +200,18 @@ export const checkZcodeProviderStatus = Effect.fn("checkZcodeProviderStatus")(fu
   const versionOutput = versionResult.success.value;
   const version = parseGenericCliVersion(`${versionOutput.stdout}\n${versionOutput.stderr}`);
 
-  if (versionOutput.code !== 0 && !cliPath.endsWith(".cjs")) {
+  if (versionOutput.code !== 0) {
     return buildServerProvider({
       presentation: ZCODE_PRESENTATION,
       enabled: zcodeSettings.enabled,
       checkedAt,
       models: fallbackModels,
       probe: {
-        installed: false,
+        installed: true,
         version: null,
         status: "error",
         auth: { status: "unknown" },
-        message:
-          "ZCode CLI is not installed. Install the ZCode desktop app from https://zcode.z.ai.",
+        message: "Failed to execute ZCode CLI health check.",
       },
     });
   }

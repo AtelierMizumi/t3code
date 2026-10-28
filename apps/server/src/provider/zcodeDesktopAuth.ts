@@ -1,12 +1,14 @@
+// @effect-diagnostics nodeBuiltinImport:off - ZCode owns this synchronous desktop config boundary.
 /**
  * Read the ZCode desktop app's coding-plan selection so T3 sessions use the
  * same Z.AI quota as the app, not a third-party API-key client like Pi.
  *
  * @module provider/zcodeDesktopAuth
  */
-import * as NodeFs from "node:fs";
-import * as NodeOs from "node:os";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as Predicate from "effect/Predicate";
 
 const DEFAULT_MODEL_ID = "GLM-5.3";
 const PREFERRED_PROVIDER_IDS = [
@@ -23,13 +25,9 @@ export interface ZcodeDesktopPlan {
   readonly authenticated: boolean;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function readJsonFile(path: string): unknown {
   try {
-    return JSON.parse(NodeFs.readFileSync(path, "utf8"));
+    return JSON.parse(NodeFS.readFileSync(path, "utf8"));
   } catch {
     return undefined;
   }
@@ -38,12 +36,12 @@ function readJsonFile(path: string): unknown {
 function zcodeHome(env: NodeJS.ProcessEnv = process.env): string {
   const storage = env.ZCODE_STORAGE_DIR?.trim();
   if (storage) return storage;
-  return NodePath.join(NodeOs.homedir(), ".zcode");
+  return NodePath.join(NodeOS.homedir(), ".zcode");
 }
 
 function modelIdsFromProvider(provider: Record<string, unknown>): string[] {
   const models = provider.models;
-  if (!isRecord(models)) return [];
+  if (!Predicate.isObject(models)) return [];
   return Object.keys(models).filter((key) => key.trim().length > 0);
 }
 
@@ -56,12 +54,43 @@ function providerEnabled(provider: Record<string, unknown>): boolean {
   return provider.enabled !== false;
 }
 
+function credentialKeyMatchesProvider(key: string, providerId: string): boolean {
+  const normalizedKey = key.trim().toLowerCase();
+  const normalizedProviderId = providerId.trim().toLowerCase();
+  const withoutBuiltinPrefix = normalizedProviderId.replace(/^builtin:/, "");
+  const aliases = new Set([normalizedProviderId, withoutBuiltinPrefix]);
+
+  if (withoutBuiltinPrefix.startsWith("zai")) aliases.add("zai");
+  if (withoutBuiltinPrefix.startsWith("bigmodel")) aliases.add("bigmodel");
+
+  if (normalizedKey === "zcodejwttoken") {
+    return withoutBuiltinPrefix.startsWith("zai");
+  }
+
+  return [...aliases].some(
+    (alias) =>
+      normalizedKey === alias ||
+      normalizedKey === `oauth:${alias}` ||
+      normalizedKey.startsWith(`oauth:${alias}:`) ||
+      normalizedKey === `token:${alias}` ||
+      normalizedKey.startsWith(`token:${alias}:`) ||
+      normalizedKey === `${alias}:token`,
+  );
+}
+
+export function hasZcodeProviderCredential(credentials: unknown, providerId: string): boolean {
+  return (
+    Predicate.isObject(credentials) &&
+    Object.keys(credentials).some((key) => credentialKeyMatchesProvider(key, providerId))
+  );
+}
+
 export function readZcodeDesktopPlan(
   env: NodeJS.ProcessEnv = process.env,
 ): ZcodeDesktopPlan | null {
   const home = zcodeHome(env);
   const config = readJsonFile(NodePath.join(home, "v2", "config.json"));
-  if (!isRecord(config) || !isRecord(config.provider)) {
+  if (!Predicate.isObject(config) || !Predicate.isObject(config.provider)) {
     return null;
   }
 
@@ -76,26 +105,17 @@ export function readZcodeDesktopPlan(
   let selected: { readonly id: string; readonly provider: Record<string, unknown> } | undefined;
   for (const id of orderedIds) {
     const provider = providers[id];
-    if (!isRecord(provider) || !providerEnabled(provider)) continue;
+    if (!Predicate.isObject(provider) || !providerEnabled(provider)) continue;
     selected = { id, provider };
-    if (id.startsWith("builtin:") && id.includes("coding-plan")) {
-      break;
-    }
+    break;
   }
   if (!selected) return null;
 
-  const options = isRecord(selected.provider.options) ? selected.provider.options : {};
+  const options = Predicate.isObject(selected.provider.options) ? selected.provider.options : {};
   const baseUrl = typeof options.baseURL === "string" ? options.baseURL.trim() : "";
   const modelIds = modelIdsFromProvider(selected.provider);
   const credentials = readJsonFile(NodePath.join(home, "v2", "credentials.json"));
-  const authenticated = isRecord(credentials)
-    ? Object.keys(credentials).some(
-        (key) =>
-          key.startsWith("oauth:") ||
-          key === "zcodejwttoken" ||
-          key.toLowerCase().includes("token"),
-      )
-    : false;
+  const authenticated = hasZcodeProviderCredential(credentials, selected.id);
 
   return {
     providerId: selected.id,
