@@ -1,0 +1,125 @@
+name: zcode-sync
+
+# Weekly attempt to merge upstream pingdotgg/t3code main into zcode-main.
+# On success it opens a PR carrying the merge and an AppImage artifact;
+# on conflicts it opens a PR whose description lists what to resolve.
+on:
+  schedule:
+    - cron: "23 3 * * 1" # Mondays 03:23 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: zcode-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          ref: zcode-main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "zcode-sync-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git config rerere.enabled true
+          git config rerere.autoUpdate true
+          git remote add upstream https://github.com/pingdotgg/t3code.git
+          git fetch upstream main
+
+      - name: Merge upstream/main
+        id: merge
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          git merge --no-edit upstream/main 2>&1 | tee merge.log
+          git diff --name-only --diff-filter=U > conflicts.txt || true
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install || pnpm install --no-frozen-lockfile
+
+      - name: Typecheck
+        id: typecheck
+        continue-on-error: true
+        run: pnpm typecheck
+
+      - name: Test ZCode provider + contracts
+        id: test
+        continue-on-error: true
+        run: |
+          pnpm --filter @t3tools/provider-zcode test
+          pnpm --filter @t3tools/contracts test
+
+      - name: Build AppImage
+        id: build
+        continue-on-error: true
+        if: steps.typecheck.outcome == 'success' && steps.test.outcome == 'success'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y cargo rustc libsecret-1-dev
+          pnpm dist:desktop:linux
+
+      - name: Commit merge result
+        if: always() && steps.merge.outcome == 'success'
+        run: |
+          git add -A
+          git commit -m "chore(sync): merge upstream/main into zcode-main" || echo "nothing to commit"
+          git push origin zcode-main
+
+      - name: Create sync PR
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="sync/$(date +%Y%m%d)"
+          git push origin "HEAD:refs/heads/$BRANCH" || true
+          {
+            echo "## Upstream sync $(date +%F)"
+            echo
+            if [[ -s conflicts.txt ]]; then
+              echo "### Conflicts to resolve"
+              '```
+              '
+              cat conflicts.txt
+              '```
+              '
+              echo
+              echo "Triage guide: zcode-maintenance/PATCHING.md"
+            else
+              echo "Merge clean."
+            fi
+            echo
+            echo "- typecheck: ${{ steps.typecheck.outcome }}"
+            echo "- tests: ${{ steps.test.outcome }}"
+            echo "- AppImage build: ${{ steps.build.outcome }}"
+          } > pr-body.md
+          gh pr list --head "$BRANCH" --state open --json number -q '.[0].number' | grep -q . \
+            && gh pr edit "$BRANCH" --body-file pr-body.md \
+            || gh pr create --head "$BRANCH" --base zcode-main \
+                 --title "Upstream sync $(date +%F)" --body-file pr-body.md
+
+      - name: Upload AppImage artifact
+        if: steps.build.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: T3-Code-AppImage-x64
+          path: apps/desktop/dist/t3-code/T3-Code-*-x86_64.AppImage
+          if-no-files-found: error
