@@ -12,6 +12,142 @@ const STALE_RUNTIME =
 
 const quoteShell = (value: string) => "'" + value.replaceAll("'", "'\"'\"'") + "'";
 
+/** agent-device 0.21.31's flags that take a value, so the launcher can find the command past them. */
+const VALUE_FLAGS: ReadonlyArray<string> = [
+  "--activity",
+  "--all",
+  "--android-device-allowlist",
+  "--app",
+  "--appium-version",
+  "--artifact",
+  "--artifacts-dir",
+  "--aws-app-arn",
+  "--aws-device-arn",
+  "--aws-interaction-mode",
+  "--aws-project-arn",
+  "--aws-region",
+  "-b",
+  "--baseline",
+  "--bearer-token",
+  "--bundle-url",
+  "--button",
+  "--config",
+  "--count",
+  "--crop-on",
+  "--custom-network",
+  "-d",
+  "--daemon-auth-token",
+  "--daemon-base-url",
+  "--daemon-server-mode",
+  "--daemon-transport",
+  "--delay-ms",
+  "--depth",
+  "--device",
+  "--device-orientation",
+  "--dsym",
+  "--duration-ms",
+  "--fps",
+  "--from",
+  "--geo-location",
+  "--github-actions-artifact",
+  "--header",
+  "--hold-ms",
+  "--host",
+  "--in-app",
+  "--include",
+  "--interval-ms",
+  "--ios-simulator-device-set",
+  "--ios-xctest-derived-data-path",
+  "--ios-xctest-env-dir",
+  "--ios-xctestrun-file",
+  "--jitter-px",
+  "--keyframes",
+  "--kind",
+  "--language",
+  "--launch-args",
+  "--launch-console",
+  "--launch-url",
+  "--lease-backend",
+  "--lease-id",
+  "--level",
+  "--listen-host",
+  "--locale",
+  "--max-passes",
+  "--max-steps",
+  "--metro-host",
+  "--metro-kind",
+  "--metro-port",
+  "--network-profile",
+  "--on-error",
+  "--os-version",
+  "--out",
+  "--pattern",
+  "--pause-ms",
+  "--pixel-density",
+  "--pixels",
+  "--plan-digest",
+  "--platform",
+  "--pointer-count",
+  "--port",
+  "--probe-timeout-ms",
+  "--project-root",
+  "--provider",
+  "--provider-app",
+  "--provider-appium-version",
+  "--provider-build",
+  "--provider-custom-network",
+  "--provider-device-orientation",
+  "--provider-device-type",
+  "--provider-geo-location",
+  "--provider-language",
+  "--provider-locale",
+  "--provider-network-profile",
+  "--provider-os-version",
+  "--provider-project",
+  "--provider-session",
+  "--provider-session-name",
+  "--provider-timezone",
+  "--proxy-base-url",
+  "--public-base-url",
+  "--quality",
+  "--record-as",
+  "--remote-config",
+  "--reporter",
+  "--report-junit",
+  "--retention-ms",
+  "--retries",
+  "--run-id",
+  "--runtime-file",
+  "-s",
+  "--scale",
+  "--scope",
+  "--search-path",
+  "--serial",
+  "--session",
+  "--session-isolation",
+  "--session-lock",
+  "--settle-quiet",
+  "--shard-all",
+  "--shard-split",
+  "--startup-timeout-ms",
+  "--state-dir",
+  "--status-host",
+  "--steps",
+  "--steps-file",
+  "--surface",
+  "--system",
+  "--target",
+  "--target-app",
+  "--template",
+  "--tenant",
+  "--threshold",
+  "--timeout",
+  "--timezone",
+  "--udid",
+  "--until",
+  "--wait",
+];
+
 // Help gets no bound flags (agent-device reads --config even for help); only args before `--` are flags.
 // agent-device 0.21.31 refuses some bound flags per command, and connect/disconnect/auth/daemon would
 // replace T3's connection. It reports a sandboxed shell and a dropped tunnel alike, so check first.
@@ -26,7 +162,14 @@ const managed = ["connect", "disconnect", "auth", "daemon"];
 const args = process.argv.slice(2);
 const end = args.indexOf("--");
 const options = end < 0 ? args : args.slice(0, end);
-const name = options.find(arg => !arg.startsWith("-")) ?? "";
+const valued = new Set(${JSON.stringify(VALUE_FLAGS)});
+let name = "";
+for (let index = 0; index < args.length; index++) {
+  const arg = args[index];
+  if (arg === "--") { name = args[index + 1] ?? ""; break; }
+  if (!arg.startsWith("-")) { name = arg; break; }
+  if (!arg.includes("=") && valued.has(arg)) index++;
+}
 const informational = args.length === 0 || ["help", "--help", "-h", "--version", "version"].includes(args[0]) || options.includes("--help") || options.includes("-h");
 if (!informational && managed.includes(name)) {
   console.error("T3 Code manages this command's connection to the device, so \`" + name + "\` is not available through it.");
@@ -142,3 +285,19 @@ export const pruneAgentDeviceLaunchers = Effect.fn("AgentDeviceShim.prune")(func
     { discard: true },
   ).pipe(Effect.ignore);
 });
+
+export type AgentDeviceCloseOutcome = "closed" | "no-session" | "failed" | "timed-out";
+
+/** What a launcher's `close` did; only a failure or timeout can leave the device claimed. */
+export const agentDeviceCloseOutcome = (result: {
+  readonly code: number | null;
+  readonly stderr: string;
+  readonly timedOut: boolean;
+}): AgentDeviceCloseOutcome =>
+  result.timedOut
+    ? "timed-out"
+    : result.code === 0
+      ? "closed"
+      : result.stderr.includes("SESSION_NOT_FOUND")
+        ? "no-session"
+        : "failed";

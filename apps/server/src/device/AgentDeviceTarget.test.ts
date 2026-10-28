@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import {
+  agentDeviceCloseOutcome,
   bindAgentDeviceLauncher,
   ensureAgentDeviceShim,
   pruneAgentDeviceLaunchers,
@@ -223,10 +224,30 @@ exec '${process.execPath.replaceAll("'", "'\"'\"'")}' "$@"
         "--session",
         "t3-a",
       ]);
-      for (const managed of [["connect"], ["disconnect"], ["auth", "status"], ["daemon", "stop"]]) {
+      // The command is found past leading flags and their values, in either form.
+      for (const config of [["--config", "/o.json"], ["--config=/o.json"]]) {
+        expect(yield* Effect.promise(() => launch([...config, "device", "status"]))).toEqual([
+          ...config,
+          "device",
+          "status",
+          "--platform",
+          "ios",
+          "--udid",
+          "UDID-1",
+        ]);
+      }
+      expect(yield* Effect.promise(() => launch(["--json", ...cdp]))).toEqual(["--json", ...cdp]);
+      for (const managed of [
+        ["connect"],
+        ["disconnect"],
+        ["auth", "status"],
+        ["daemon", "stop"],
+        ["--config", "/o.json", "auth", "status"],
+        ["--", "connect"],
+      ]) {
         yield* Effect.promise(() =>
           expect(launch(managed)).rejects.toThrow(
-            `T3 Code manages this command's connection to the device, so \`${managed[0]}\` is not available through it.`,
+            `T3 Code manages this command's connection to the device, so \`${managed.find((arg) => ["connect", "disconnect", "auth", "daemon"].includes(arg))}\` is not available through it.`,
           ),
         );
       }
@@ -237,6 +258,26 @@ exec '${process.execPath.replaceAll("'", "'\"'\"'")}' "$@"
       Effect.provide(NodeServices.layer),
     ),
   );
+
+  it("tells a released session from a close that failed or timed out", () => {
+    const result = (code: number | null, stderr = "", timedOut = false) => ({
+      stdout: "",
+      stderr,
+      code,
+      timedOut,
+    });
+    expect(agentDeviceCloseOutcome(result(0))).toBe("closed");
+    // A session that never ran `open` has nothing to release.
+    expect(
+      agentDeviceCloseOutcome(
+        result(1, "Error (SESSION_NOT_FOUND): No active session. Run open first."),
+      ),
+    ).toBe("no-session");
+    expect(
+      agentDeviceCloseOutcome(result(1, "Error (COMMAND_FAILED): Remote daemon is unavailable")),
+    ).toBe("failed");
+    expect(agentDeviceCloseOutcome(result(null, "", true))).toBe("timed-out");
+  });
 
   it.live("stops before agent-device when T3's device connection is down", () =>
     Effect.gen(function* () {

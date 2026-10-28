@@ -34,6 +34,7 @@ import { resolveNodeExecutable, nodeRuntimeUnavailableMessage } from "@t3tools/s
 import * as Path from "effect/Path";
 import { ensureAgentDevice, ensureDeviceHub } from "./DeviceToolchain.ts";
 import {
+  agentDeviceCloseOutcome,
   bindAgentDeviceLauncher,
   ensureAgentDeviceShim,
   pruneAgentDeviceLaunchers,
@@ -1204,8 +1205,8 @@ export const make = Effect.gen(function* () {
         Effect.provideService(FileSystem.FileSystem, fs),
         Effect.provideService(Path.Path, path),
       ),
-    // A session that never ran `open` has nothing to end, and an unreachable host fails fast in
-    // the launcher's connection check; either way the launcher still goes.
+    // Best effort: an unreachable host fails fast in the launcher's connection check, and the
+    // launcher goes either way. Only a failed or timed-out close can leave the device claimed.
     release: (launcher) =>
       resolveNodeExecutable("Device automation").pipe(
         Effect.flatMap((node) =>
@@ -1219,6 +1220,16 @@ export const make = Effect.gen(function* () {
         ),
         Effect.provideService(FileSystem.FileSystem, fs),
         Effect.provideService(Path.Path, path),
+        Effect.flatMap((result) => {
+          const outcome = agentDeviceCloseOutcome(result);
+          return outcome === "failed" || outcome === "timed-out"
+            ? Effect.logWarning("Could not end the agent-device session", {
+                launcher,
+                outcome,
+                stderr: result.stderr.slice(-500),
+              })
+            : Effect.void;
+        }),
         Effect.tapError((cause) =>
           Effect.logWarning("Could not end the agent-device session", { launcher, cause }),
         ),
