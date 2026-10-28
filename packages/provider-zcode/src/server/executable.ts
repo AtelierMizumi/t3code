@@ -1,13 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off - ZCode discovery is a synchronous Node executable boundary.
 /**
  * Resolve the official ZCode CLI entry (`zcode.cjs` from the desktop app).
- *
- * The `zcode` wrapper on PATH is often an Electron launcher. Spawning that
- * from T3 Code opens the GUI instead of the stdio app-server, so discovery
- * prefers the bundled `zcode.cjs` and only falls back to a PATH binary when
- * it is actually a Node CLI.
- *
- * @module provider/Drivers/ZCodeExecutable
+ * The `zcode` launcher on PATH is often an Electron wrapper that opens the
+ * GUI, so discovery prefers the bundled Node bundle and skips wrappers.
  */
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";

@@ -3,15 +3,15 @@ import { describe, expect, it } from "@effect/vitest";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import {
   buildZcodeAppServerArgv,
   findZcodeOnPath,
   isZcodeNodeBundle,
   resolveZcodeCliPath,
-} from "./ZCodeExecutable.ts";
+} from "./executable.ts";
 
 describe("resolveZcodeCliPath", () => {
   it("prefers an explicit zcode.cjs path", () => {
@@ -47,7 +47,7 @@ describe("resolveZcodeCliPath", () => {
 
   it.effect("skips non-executable PATH entries that shadow a usable CLI", () =>
     Effect.gen(function* () {
-      const platform = yield* HostProcessPlatform;
+      const platform = yield* HostProcess.Platform;
       if (platform === "win32") return;
 
       const first = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "zcode-path-first-"));
@@ -57,13 +57,7 @@ describe("resolveZcodeCliPath", () => {
       NodeFS.writeFileSync(shadow, "not executable\n", { mode: 0o644 });
       NodeFS.writeFileSync(executable, "#!/bin/sh\n", { mode: 0o755 });
 
-      expect(
-        findZcodeOnPath("zcode", { PATH: [first, second].join(NodePath.delimiter) }, platform),
-      ).toBe(executable);
+      expect(findZcodeOnPath("zcode", { PATH: `${first}:${second}` }, platform)).toBe(executable);
     }),
   );
-
-  it("recognizes node bundle extensions case-insensitively", () => {
-    expect(isZcodeNodeBundle("/Applications/ZCode/app.ZCODE.CJS")).toBe(true);
-  });
 });

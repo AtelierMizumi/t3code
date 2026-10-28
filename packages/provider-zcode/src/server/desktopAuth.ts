@@ -1,9 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off - ZCode owns this synchronous desktop config boundary.
 /**
  * Read the ZCode desktop app's coding-plan selection so T3 sessions use the
- * same Z.AI quota as the app, not a third-party API-key client like Pi.
+ * same Z.AI quota as the app, not a third-party API-key client.
  *
- * @module provider/zcodeDesktopAuth
+ * @module zcode/desktopAuth
  */
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
