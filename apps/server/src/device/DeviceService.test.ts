@@ -685,6 +685,8 @@ it.effect.each(["shutdown", "close"] as const)(
       };
       const launchers = new Set(["t3-from-a-previous-run"]);
       const released: Array<[string, boolean]> = [];
+      // Whether the device was still on when each session was released.
+      const releasedWhileBooted: Array<boolean> = [];
       let pauseBind: { entered: Deferred.Deferred<void>; proceed: Deferred.Deferred<void> } | null =
         null;
       const service = yield* DeviceService.makeWithHosts(
@@ -710,6 +712,7 @@ it.effect.each(["shutdown", "close"] as const)(
           release: (launcher) =>
             Effect.sync(() => {
               released.push([launcher, launchers.has(launcher)]);
+              releasedWhileBooted.push(booted);
             }),
         },
       ).pipe(Effect.provide(NodeCrypto.layer));
@@ -746,6 +749,8 @@ it.effect.each(["shutdown", "close"] as const)(
         new Set([session, firstOther]),
       );
       expect(released.every(([, existed]) => existed)).toBe(true);
+      // agent-device can close the session's app only while the device is on.
+      expect(releasedWhileBooted).toEqual([true, true]);
       // A device_open that was still preparing when the close landed.
       expect(yield* service.agentLauncher({ ...target(threadId), targetArgs: [] })).toEqual(
         Option.none(),
