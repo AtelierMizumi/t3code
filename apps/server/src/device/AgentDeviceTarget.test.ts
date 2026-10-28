@@ -313,6 +313,23 @@ exec '${process.execPath.replaceAll("'", "'\"'\"'")}' "$@"
           stderr: `T3 Code's device connection at 127.0.0.1:${port} is not reachable from this shell (connect ECONNREFUSED). Call device_open again to reconnect; if that succeeds and this repeats, this shell runs in a network sandbox, so run the command with network access, outside the sandbox.\n`,
         }),
       );
+      // An explicit --daemon-base-url wins over the config, as it does in agent-device.
+      const override = `http://127.0.0.1:${yield* listeningPort}`;
+      for (const flag of [["--daemon-base-url", override], [`--daemon-base-url=${override}`]]) {
+        expect(
+          JSON.parse(
+            (yield* Effect.promise(() => launch(["screenshot", "/tmp/shot.png", ...flag]))).stdout,
+          ),
+        ).toEqual([
+          "screenshot",
+          "/tmp/shot.png",
+          ...flag,
+          "--config",
+          configPath,
+          "--session",
+          "t3-a",
+        ]);
+      }
       // cdp talks to Metro, not to T3's connection, so it still runs.
       expect(
         JSON.parse((yield* Effect.promise(() => launch(["cdp", "target", "list"]))).stdout),

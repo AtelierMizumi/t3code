@@ -150,7 +150,8 @@ const VALUE_FLAGS: ReadonlyArray<string> = [
 
 // Help gets no bound flags (agent-device reads --config even for help); only args before `--` are flags.
 // agent-device 0.21.31 refuses some bound flags per command; connect/disconnect/auth/daemon would
-// replace T3's connection, and device status reads this machine's claims. It reports a sandboxed shell and a dropped tunnel alike, so check first.
+// replace T3's connection; device status reads this machine's claims. It reports a sandboxed shell and a
+// dropped tunnel alike, so check first, at --daemon-base-url if given, as agent-device prefers it.
 const launcherSource = (node: string, entryPath: string, boundArgs: ReadonlyArray<string>) =>
   `import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -192,7 +193,7 @@ if (!existsSync(entry)) {
   process.exit(1);
 }
 const valueOf = flag => { const inline = options.find(arg => arg.startsWith(flag + "=")); if (inline) return inline.slice(flag.length + 1); const index = options.indexOf(flag); return index >= 0 ? options[index + 1] : undefined; };
-const endpoint = () => { try { const url = new URL(JSON.parse(readFileSync(valueOf("--config"), "utf8")).daemonBaseUrl); return ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) && url.port ? url : undefined; } catch { return undefined; } };
+const endpoint = () => { try { const url = new URL(valueOf("--daemon-base-url") ?? JSON.parse(readFileSync(valueOf("--config"), "utf8")).daemonBaseUrl); return ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) && url.port ? url : undefined; } catch { return undefined; } };
 const local = informational || refused.has(name) ? undefined : endpoint();
 if (local) {
   const failure = await new Promise(resolve => {
