@@ -12,27 +12,56 @@ const STALE_RUNTIME =
 
 const quoteShell = (value: string) => "'" + value.replaceAll("'", "'\"'\"'") + "'";
 
-// Help needs no device, and agent-device reads --config even for help, so help gets no bound flags.
-// Arguments after `--` are text, so only those before it are read as flags.
+// Help gets no bound flags (agent-device reads --config even for help); only args before `--` are flags.
+// agent-device 0.21.31 refuses some bound flags per command, and connect/disconnect/auth/daemon would
+// replace T3's connection. It reports a sandboxed shell and a dropped tunnel alike, so check first.
 const launcherSource = (node: string, entryPath: string, boundArgs: ReadonlyArray<string>) =>
   `import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { connect } from "node:net";
 const entry = ${JSON.stringify(entryPath)};
 const bound = ${JSON.stringify(boundArgs)};
+const refused = new Map([["cdp", ["--platform", "--udid", "--config", "--session"]], ["device", ["--session"]], ["connection", ["--platform", "--udid"]]]);
+const managed = ["connect", "disconnect", "auth", "daemon"];
 const args = process.argv.slice(2);
 const end = args.indexOf("--");
 const options = end < 0 ? args : args.slice(0, end);
+const name = options.find(arg => !arg.startsWith("-")) ?? "";
 const informational = args.length === 0 || ["help", "--help", "-h", "--version", "version"].includes(args[0]) || options.includes("--help") || options.includes("-h");
-if (!informational) for (let index = 0; index + 1 < bound.length; index += 2) if (!options.some(arg => arg === bound[index] || arg.startsWith(bound[index] + "="))) options.push(bound[index], bound[index + 1]);
+if (!informational && managed.includes(name)) {
+  console.error("T3 Code manages this command's connection to the device, so \`" + name + "\` is not available through it.");
+  process.exit(1);
+}
+const skip = refused.get(name) ?? [];
+if (!informational) for (let index = 0; index + 1 < bound.length; index += 2) if (!skip.includes(bound[index]) && !options.some(arg => arg === bound[index] || arg.startsWith(bound[index] + "="))) options.push(bound[index], bound[index + 1]);
 const command = end < 0 ? options : [...options, ...args.slice(end)];
 const hasValue = flag => { const index = options.indexOf(flag); return options.some(arg => arg.startsWith(flag + "=") && arg.length > flag.length + 1) || (index >= 0 && !!options[index + 1] && !options[index + 1].startsWith("--")); };
-if (!informational && !(hasValue("--config") && hasValue("--session"))) {
+if (!informational && !skip.includes("--session") && !(hasValue("--config") && hasValue("--session"))) {
   console.error("Call device_open first and run the agent-device command it returns.");
   process.exit(1);
 }
 if (!existsSync(entry)) {
   console.error(${JSON.stringify(STALE_RUNTIME)});
   process.exit(1);
+}
+const valueOf = flag => { const inline = options.find(arg => arg.startsWith(flag + "=")); if (inline) return inline.slice(flag.length + 1); const index = options.indexOf(flag); return index >= 0 ? options[index + 1] : undefined; };
+const endpoint = () => { try { const url = new URL(JSON.parse(readFileSync(valueOf("--config"), "utf8")).daemonBaseUrl); return ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) && url.port ? url : undefined; } catch { return undefined; } };
+const local = informational || refused.has(name) ? undefined : endpoint();
+if (local) {
+  const failure = await new Promise(resolve => {
+    const socket = connect({ host: local.hostname.replace(/^\\[|\\]$/g, ""), port: Number(local.port) });
+    socket.setTimeout(3000, () => { socket.destroy(); resolve("ETIMEDOUT"); });
+    socket.once("connect", () => { socket.destroy(); resolve(undefined); });
+    socket.once("error", error => resolve(error.code ?? "ERROR"));
+  });
+  if (failure === "EPERM" || failure === "EACCES") {
+    console.error("This shell cannot reach T3 Code's device connection at " + local.host + " (connect " + failure + "): a network sandbox is blocking localhost. Run this command again with network access, outside the sandbox.");
+    process.exit(1);
+  }
+  if (failure) {
+    console.error("T3 Code's connection to this device's host (" + local.host + ") is not running. Call device_open again to reconnect.");
+    process.exit(1);
+  }
 }
 const env = { ...process.env, ELECTRON_RUN_AS_NODE: "1" };
 delete env.AGENT_DEVICE_DAEMON_BASE_URL;

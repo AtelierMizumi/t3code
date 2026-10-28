@@ -2,6 +2,7 @@
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { describe, expect, it } from "@effect/vitest";
 import * as NodeChildProcess from "node:child_process";
+import * as NodeNet from "node:net";
 import * as NodeUtil from "node:util";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
@@ -19,6 +20,18 @@ import {
 } from "./AgentDeviceTarget.ts";
 
 const exec = NodeUtil.promisify(NodeChildProcess.execFile);
+
+/** A loopback port that accepts connections until the scope closes, like T3's device connection. */
+const listeningPort = Effect.acquireRelease(
+  Effect.promise(
+    () =>
+      new Promise<NodeNet.Server>((resolve) => {
+        const server = NodeNet.createServer((socket) => socket.destroy());
+        server.listen(0, "127.0.0.1", () => resolve(server));
+      }),
+  ),
+  (server) => Effect.promise(() => new Promise<void>((resolve) => server.close(() => resolve()))),
+).pipe(Effect.map((server) => (server.address() as NodeNet.AddressInfo).port));
 
 describe("host-bound agent commands", () => {
   it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
@@ -163,6 +176,121 @@ exec '${process.execPath.replaceAll("'", "'\"'\"'")}' "$@"
     ),
   );
 
+  it.effect("passes each command only the bound flags agent-device accepts for it", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-device-commands-" });
+      const entryPath = path.join(dir, "cli.mjs");
+      yield* fs.writeFileString(entryPath, "console.log(JSON.stringify(process.argv.slice(2)));");
+      const command = yield* bindAgentDeviceLauncher({
+        entryPath,
+        stateDir: dir,
+        session: "t3-a",
+        targetArgs: [
+          "--platform",
+          "ios",
+          "--udid",
+          "UDID-1",
+          "--config",
+          "/h.json",
+          "--session",
+          "t3-a",
+        ],
+      });
+      const launch = (args: ReadonlyArray<string>) =>
+        exec(process.execPath, [
+          path.join(path.dirname(command), "agent-device-launcher.mjs"),
+          ...args,
+        ]).then((result) => JSON.parse(result.stdout));
+      // agent-device 0.21.31 rejects these flags with "unknown option" or "not supported for command".
+      const cdp = ["cdp", "target", "list", "--url", "http://127.0.0.1:8081"];
+      expect(yield* Effect.promise(() => launch(cdp))).toEqual(cdp);
+      expect(yield* Effect.promise(() => launch(["device", "status"]))).toEqual([
+        "device",
+        "status",
+        "--platform",
+        "ios",
+        "--udid",
+        "UDID-1",
+        "--config",
+        "/h.json",
+      ]);
+      expect(yield* Effect.promise(() => launch(["connection"]))).toEqual([
+        "connection",
+        "--config",
+        "/h.json",
+        "--session",
+        "t3-a",
+      ]);
+      for (const managed of [["connect"], ["disconnect"], ["auth", "status"], ["daemon", "stop"]]) {
+        yield* Effect.promise(() =>
+          expect(launch(managed)).rejects.toThrow(
+            `T3 Code manages this command's connection to the device, so \`${managed[0]}\` is not available through it.`,
+          ),
+        );
+      }
+    }).pipe(
+      Effect.scoped,
+      Effect.provideService(HostProcess.IsExecutable, false),
+      Effect.provideService(HostProcess.ExecutablePath, process.execPath),
+      Effect.provide(NodeServices.layer),
+    ),
+  );
+
+  it.live("stops before agent-device when T3's device connection is down", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-device-endpoint-" });
+      const entryPath = path.join(dir, "cli.mjs");
+      yield* fs.writeFileString(entryPath, "console.log(JSON.stringify(process.argv.slice(2)));");
+      const configPath = path.join(dir, "host.json");
+      // A port that was just free: nothing listens on it, so a connect is refused.
+      const port = yield* Effect.promise(
+        () =>
+          new Promise<number>((resolve) => {
+            const server = NodeNet.createServer();
+            server.listen(0, "127.0.0.1", () => {
+              const address = server.address() as NodeNet.AddressInfo;
+              server.close(() => resolve(address.port));
+            });
+          }),
+      );
+      yield* writeAgentDeviceConfig(configPath, {
+        baseUrl: `http://127.0.0.1:${port}`,
+        token: "secret",
+      });
+      const command = yield* bindAgentDeviceLauncher({
+        entryPath,
+        stateDir: dir,
+        session: "t3-a",
+        targetArgs: ["--config", configPath, "--session", "t3-a"],
+      });
+      const launch = (args: ReadonlyArray<string>) =>
+        exec(process.execPath, [
+          path.join(path.dirname(command), "agent-device-launcher.mjs"),
+          ...args,
+        ]);
+      yield* Effect.promise(() =>
+        expect(launch(["screenshot", "/tmp/shot.png"])).rejects.toMatchObject({
+          code: 1,
+          stdout: "",
+          stderr: `T3 Code's connection to this device's host (127.0.0.1:${port}) is not running. Call device_open again to reconnect.\n`,
+        }),
+      );
+      // cdp talks to Metro, not to T3's connection, so it still runs.
+      expect(
+        JSON.parse((yield* Effect.promise(() => launch(["cdp", "target", "list"]))).stdout),
+      ).toEqual(["cdp", "target", "list"]);
+    }).pipe(
+      Effect.scoped,
+      Effect.provideService(HostProcess.IsExecutable, false),
+      Effect.provideService(HostProcess.ExecutablePath, process.execPath),
+      Effect.provide(NodeServices.layer),
+    ),
+  );
+
   it.effect("prunes the launchers of ended sessions and keeps the shared one", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -241,9 +369,10 @@ if (process.env.AGENT_DEVICE_DAEMON_BASE_URL) process.exit(2);`,
       const files = yield* Effect.forEach(["mini", "android"], (host) =>
         agentDeviceConfigPath(dir, host, path),
       );
+      const ports = [yield* listeningPort, yield* listeningPort, yield* listeningPort];
       for (const [index, file] of files.entries())
         yield* writeAgentDeviceConfig(file, {
-          baseUrl: `http://127.0.0.1:${1000 + index}`,
+          baseUrl: `http://127.0.0.1:${ports[index]}`,
           token: `token-${index}`,
         });
       const invoke = (file: string) =>
@@ -260,12 +389,12 @@ if (process.env.AGENT_DEVICE_DAEMON_BASE_URL) process.exit(2);`,
           { env: { ...process.env, AGENT_DEVICE_DAEMON_BASE_URL: "http://wrong-host" } },
         ).then((result) => JSON.parse(result.stdout));
       expect(yield* Effect.promise(() => Promise.all(files.map(invoke)))).toEqual([
-        { daemonBaseUrl: "http://127.0.0.1:1000", daemonAuthToken: "token-0" },
-        { daemonBaseUrl: "http://127.0.0.1:1001", daemonAuthToken: "token-1" },
+        { daemonBaseUrl: `http://127.0.0.1:${ports[0]}`, daemonAuthToken: "token-0" },
+        { daemonBaseUrl: `http://127.0.0.1:${ports[1]}`, daemonAuthToken: "token-1" },
       ]);
       const second = yield* fs.readFileString(files[1]!);
       yield* writeAgentDeviceConfig(files[0]!, {
-        baseUrl: "http://127.0.0.1:2000",
+        baseUrl: `http://127.0.0.1:${ports[2]}`,
         token: "new",
       });
       expect((yield* Effect.promise(() => invoke(files[0]!))).daemonAuthToken).toBe("new");

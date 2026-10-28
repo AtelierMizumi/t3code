@@ -95,6 +95,11 @@ How to drive a device is returned from `device_open`, not kept in an
 always-loaded prompt or skill: it costs nothing in threads that never open a
 device and cannot drift from the pinned CLI version. `device_open` returns a
 launcher bound to its agent-device session, so agents need no target flags.
+The launcher leaves out the flags a command refuses (`cdp` talks to Metro, not
+to the device), refuses the commands that would replace T3's connection, and
+checks that connection first: agent-device reports a sandboxed shell and a
+dropped tunnel alike as an unreachable daemon, so the launcher names which one it
+is.
 
 Agents choose between these tools and ssh before they open anything, so
 sessions that hold `device` get a short block from
