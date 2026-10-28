@@ -111,7 +111,7 @@ const PriorToolCall = Schema.Struct({
 
 /**
  * One expected call. `args` match partially: `~text` is a case-insensitive substring,
- * `"<=N"` / `">=N"` bound a number, and keys may be dotted paths.
+ * `regex:pattern` matches a string, `"<=N"` / `">=N"` bound a number, and keys may be dotted paths.
  */
 const McpToolUseCall = Schema.Struct({
   tool: Schema.String,
@@ -1150,7 +1150,7 @@ const answerToolCall = Effect.fn("evaluateMcpToolUse.answerToolCall")(function* 
 });
 
 const BOUND = /^([<>]=)(-?\d+(?:\.\d+)?)$/;
-/** Partial match: `~text` is a case-insensitive substring, `<=N` / `>=N` bound a number. */
+/** Partial match: `~text` is a substring, `regex:pattern` tests a string, `<=N` / `>=N` bound a number. */
 const matches = (expected: unknown, actual: unknown): boolean => {
   const bound = typeof expected === "string" ? BOUND.exec(expected) : null;
   if (bound !== null) {
@@ -1159,6 +1159,9 @@ const matches = (expected: unknown, actual: unknown): boolean => {
   }
   if (typeof expected === "string" && expected.startsWith("~")) {
     return valueText(actual).toLowerCase().includes(expected.slice(1).toLowerCase());
+  }
+  if (typeof expected === "string" && expected.startsWith("regex:")) {
+    return typeof actual === "string" && new RegExp(expected.slice(6)).test(actual);
   }
   if (Array.isArray(expected)) {
     return (

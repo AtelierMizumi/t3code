@@ -152,6 +152,45 @@ it("passes a good run and names every rule a bad run breaks", () => {
   ]);
 });
 
+it("matches invocation expressions and rejects discovery, wrong tabs, and wrong arguments", () => {
+  const expect = {
+    calls: [
+      {
+        tool: "preview_evaluate",
+        args: {
+          tabId: "tab_1",
+          expression: String.raw`regex:\.callTool\(\s*['"]create_note['"]\s*,\s*\{(?=[^}]*\btitle['"]?\s*:\s*['"]Groceries['"])(?=[^}]*\bbody['"]?\s*:\s*['"]milk, eggs, bread['"])`,
+        },
+      },
+    ],
+  };
+  const run = (expression: unknown, tabId = "tab_1"): SampleRun => ({
+    calls: [{ step: 0, tool: "preview_evaluate", input: { tabId, expression } }],
+    text: "",
+    stopReason: "end_turn",
+  });
+  const expression =
+    'navigator.modelContext.callTool("create_note", {title: "Groceries", body: "milk, eggs, bread"})';
+  assert.deepEqual(failed(expect, run(expression)), []);
+  assert.deepEqual(
+    failed(
+      expect,
+      run(
+        "navigator.modelContext.callTool('create_note', {body:'milk, eggs, bread',title:'Groceries'})",
+      ),
+    ),
+    [],
+  );
+  for (const sample of [
+    run("navigator.modelContext.getTools().find(t => t.name === 'create_note')"),
+    run(expression, "wrong_tab"),
+    run(expression.replace("Groceries", "Work")),
+    run(expression.replace("milk, eggs, bread", "milk")),
+    run(null),
+  ])
+    assert.lengthOf(failed(expect, sample), 1);
+});
+
 it("bounds numbers and reads target.options in either schema form", () => {
   const expect = {
     calls: [
