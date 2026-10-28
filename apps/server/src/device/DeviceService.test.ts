@@ -684,6 +684,7 @@ it.effect.each(["shutdown", "close"] as const)(
         stop: Effect.void,
       };
       const launchers = new Set(["t3-from-a-previous-run"]);
+      const released: Array<[string, boolean]> = [];
       let pauseBind: { entered: Deferred.Deferred<void>; proceed: Deferred.Deferred<void> } | null =
         null;
       const service = yield* DeviceService.makeWithHosts(
@@ -704,6 +705,11 @@ it.effect.each(["shutdown", "close"] as const)(
           prune: (live) =>
             Effect.sync(() => {
               for (const session of launchers) if (!live.has(session)) launchers.delete(session);
+            }),
+          // Records whether the launcher still existed, since its close runs through it.
+          release: (launcher) =>
+            Effect.sync(() => {
+              released.push([launcher, launchers.has(launcher)]);
             }),
         },
       ).pipe(Effect.provide(NodeCrypto.layer));
@@ -729,6 +735,17 @@ it.effect.each(["shutdown", "close"] as const)(
       expect(capture).toBeNull();
       expect((yield* service.state).sessions).toEqual([]);
       expect(launchers).toEqual(new Set());
+      // Retiring a session ends its agent-device session too, which releases the device claim.
+      // Powering the device off retires the other thread's session on it as well.
+      const firstOther = yield* agentDeviceSession(
+        other.threadId,
+        LOCAL_DEVICE_HOST_ID,
+        deviceId,
+      ).pipe(Effect.provide(NodeCrypto.layer));
+      expect(new Set(released.map(([launcher]) => launcher))).toEqual(
+        new Set([session, firstOther]),
+      );
+      expect(released.every(([, existed]) => existed)).toBe(true);
       // A device_open that was still preparing when the close landed.
       expect(yield* service.agentLauncher({ ...target(threadId), targetArgs: [] })).toEqual(
         Option.none(),
@@ -740,6 +757,7 @@ it.effect.each(["shutdown", "close"] as const)(
       const otherSession = yield* bind(other);
       yield* service.close({ threadId: other.threadId });
       expect(launchers).toEqual(new Set([session]));
+      expect(released.slice(2)).toEqual([[otherSession, true]]);
       expect(otherSession).not.toBe(session);
       // A caller interrupted after retirement committed, while a bind holds the launcher lock.
       pauseBind = { entered: yield* Deferred.make<void>(), proceed: yield* Deferred.make<void>() };

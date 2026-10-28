@@ -230,6 +230,8 @@ export interface AgentDeviceLaunchers {
   }) => Effect.Effect<string, DeviceError>;
   /** Removes every launcher whose session is not in `live`. */
   readonly prune: (live: ReadonlySet<string>) => Effect.Effect<void>;
+  /** Ends the agent-device session behind a launcher, which releases its claim on the device. */
+  readonly release?: (launcher: string) => Effect.Effect<void>;
 }
 
 export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* (
@@ -294,15 +296,29 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
   });
 
   const launcherLock = yield* Semaphore.make(1);
+  /** Launchers bound since startup, by agent-device session. */
+  const boundLaunchers = new Map<string, string>();
   // Binding and pruning read sessions under the lock, so neither acts on a session list the other has outdated.
+  // A retired session's agent-device session ends before its launcher goes, and a reopen of the same
+  // device waits for the lock, so the close cannot end the reopened session.
   const pruneLaunchers = launcherLock.withPermit(
     Effect.gen(function* () {
       if (!launchers) return;
       const { state } = yield* SynchronizedRef.get(stateRef);
-      const live = yield* Effect.forEach(state.sessions, (session) =>
-        agentDeviceSession(session.threadId, session.hostId, session.deviceId),
-      ).pipe(Effect.provideService(Crypto.Crypto, crypto));
-      yield* launchers.prune(new Set(live));
+      const live = new Set(
+        yield* Effect.forEach(state.sessions, (session) =>
+          agentDeviceSession(session.threadId, session.hostId, session.deviceId),
+        ).pipe(Effect.provideService(Crypto.Crypto, crypto)),
+      );
+      const retired = [...boundLaunchers].filter(([session]) => !live.has(session));
+      for (const [session] of retired) boundLaunchers.delete(session);
+      const release = launchers.release;
+      if (release)
+        yield* Effect.forEach(retired, ([, launcher]) => release(launcher), {
+          concurrency: "unbounded",
+          discard: true,
+        });
+      yield* launchers.prune(live);
     }),
   );
 
@@ -1048,7 +1064,9 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
               )
             )
               return Option.none();
-            return Option.some(yield* launchers.bind({ session, targetArgs }));
+            const launcher = yield* launchers.bind({ session, targetArgs });
+            boundLaunchers.set(session, launcher);
+            return Option.some(launcher);
           }),
         );
       }),
@@ -1185,6 +1203,26 @@ export const make = Effect.gen(function* () {
       pruneAgentDeviceLaunchers({ stateDir: config.stateDir, live }).pipe(
         Effect.provideService(FileSystem.FileSystem, fs),
         Effect.provideService(Path.Path, path),
+      ),
+    // A session that never ran `open` has nothing to end, and an unreachable host fails fast in
+    // the launcher's connection check; either way the launcher still goes.
+    release: (launcher) =>
+      resolveNodeExecutable("Device automation").pipe(
+        Effect.flatMap((node) =>
+          runner.run({
+            command: node,
+            args: [path.join(path.dirname(launcher), "agent-device-launcher.mjs"), "close"],
+            env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+            timeout: "15 seconds",
+            timeoutBehavior: "timedOutResult",
+          }),
+        ),
+        Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.provideService(Path.Path, path),
+        Effect.tapError((cause) =>
+          Effect.logWarning("Could not end the agent-device session", { launcher, cause }),
+        ),
+        Effect.ignore,
       ),
   };
   const probeContext =
