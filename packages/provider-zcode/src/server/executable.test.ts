@@ -32,24 +32,36 @@ describe("resolveZcodeCliPath", () => {
     expect(resolved.endsWith("zcode.cjs") || resolved === "zcode").toBe(true);
   });
 
-  it("flags ELECTRON_RUN_AS_NODE when the runtime is Electron", () => {
+  it("flags ELECTRON_RUN_AS_NODE when spawning through our own runtime binary", () => {
     const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "zcode-exec-"));
     const cjs = NodePath.join(dir, "zcode.cjs");
     NodeFS.writeFileSync(cjs, "console.log('ok')\n");
+    // The default node binary IS process.execPath in tests: the packaged
+    // sidecar runs the same way, just with an Electron binary in its place.
     const argv = buildZcodeAppServerArgv({
       binaryPath: cjs,
       env: {},
       platform: "linux",
-      electronVersion: "37.2.0",
     });
     expect(argv.envExtras).toEqual({ ELECTRON_RUN_AS_NODE: "1" });
-    const plain = buildZcodeAppServerArgv({
+
+    // A custom ZCODE_NODE that is not our own binary gets no flag...
+    const other = NodePath.join(dir, "other-node");
+    NodeFS.writeFileSync(other, "#!/bin/sh\n");
+    const custom = buildZcodeAppServerArgv({
       binaryPath: cjs,
-      env: {},
+      env: { ZCODE_NODE: other },
       platform: "linux",
-      electronVersion: undefined,
     });
-    expect(plain.envExtras).toBeUndefined();
+    expect(custom.envExtras).toBeUndefined();
+
+    // ...unless the environment carries the Electron flag already.
+    const inherited = buildZcodeAppServerArgv({
+      binaryPath: cjs,
+      env: { ZCODE_NODE: other, ELECTRON_RUN_AS_NODE: "1" },
+      platform: "linux",
+    });
+    expect(inherited.envExtras).toEqual({ ELECTRON_RUN_AS_NODE: "1" });
   });
 
   it("builds an app-server argv that forces the desktop surface", () => {

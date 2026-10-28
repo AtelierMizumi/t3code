@@ -159,31 +159,37 @@ export function resolveZcodeNodeBinary(env: NodeJS.ProcessEnv = process.env): st
   return process.execPath;
 }
 
-/** Inside a packaged Electron sidecar, execPath is the Electron binary, not node. */
-export function isElectronRuntime(electronVersion: string | undefined): boolean {
-  return electronVersion !== undefined;
-}
-
 export function buildZcodeAppServerArgv(input: {
   readonly binaryPath: string | null | undefined;
   readonly env: NodeJS.ProcessEnv;
   readonly platform: NodeJS.Platform;
-  readonly electronVersion?: string | undefined;
 }): {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
-  /** Set when execPath is an Electron binary that must run the bundle as plain node. */
+  /** ELECTRON_RUN_AS_NODE when our own runtime binary must run the bundle as plain node. */
   readonly envExtras?: Readonly<Record<string, string>>;
 } {
   const cliPath = resolveZcodeCliPath(input.binaryPath, input.env, input.platform);
   if (isZcodeNodeBundle(cliPath)) {
     const command = resolveZcodeNodeBinary(input.env);
+    // Spawning through our own runtime binary may mean spawning an Electron
+    // binary: the packaged desktop sidecar runs as
+    // `ELECTRON_RUN_AS_NODE=1 t3code ... bin.mjs`, so process.versions.electron
+    // is undefined there and cannot be used for detection. Plain node ignores
+    // the flag, Electron honors it and runs the bundle as node.
+    const spawningOwnBinary = command === process.execPath;
+    const inheritsElectronFlag =
+      input.env.ELECTRON_RUN_AS_NODE === "1" || process.env.ELECTRON_RUN_AS_NODE === "1";
+    if (spawningOwnBinary || inheritsElectronFlag) {
+      return {
+        command,
+        args: [cliPath, "app-server", "--surface", "desktop"],
+        envExtras: { ELECTRON_RUN_AS_NODE: "1" },
+      };
+    }
     return {
       command,
       args: [cliPath, "app-server", "--surface", "desktop"],
-      ...(isElectronRuntime(input.electronVersion ?? process.versions?.electron)
-        ? { envExtras: { ELECTRON_RUN_AS_NODE: "1" } }
-        : {}),
     };
   }
   return {
