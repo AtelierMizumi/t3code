@@ -752,6 +752,8 @@ it.effect.each(["shutdown", "close"] as const)(
       );
       expect(launchers).toEqual(new Set());
       expect(yield* bind(input)).toBe(session);
+      // Reopening the same device ends nothing.
+      expect(released).toHaveLength(2);
       expect(capture).toBe(2);
       expect((yield* service.state).sessions).toHaveLength(1);
       const otherSession = yield* bind(other);

@@ -851,16 +851,18 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
     },
   );
 
+  // Sessions retire before the power-off, while their agent-device sessions can still close the app;
+  // agent-device keeps a claim whose app close fails.
   const shutdown: DeviceService["Service"]["shutdown"] = Effect.fn("DeviceService.shutdown")(
     function* (input) {
       const host = yield* resolveHost(input.hostId);
-      yield* shutdownDevice(host.id, input.deviceId, input.platform);
       yield* publish((current) => ({
         ...current,
         sessions: current.sessions.filter(
           (session) => !(session.hostId === host.id && session.deviceId === input.deviceId),
         ),
       }));
+      yield* shutdownDevice(host.id, input.deviceId, input.platform);
     },
   );
 

@@ -100,7 +100,7 @@ to the device), refuses the commands that would replace T3's connection, and
 checks that connection first: agent-device reports a sandboxed shell and a
 dropped tunnel alike as an unreachable daemon, so the launcher names which one it
 is. Ending a session (`device_close`, the Device panel, a shutdown) also closes
-its agent-device session, which releases the CLI's claim on the device.
+its agent-device session, which quits the app that session opened and releases the CLI's claim on the device.
 
 Agents choose between these tools and ssh before they open anything, so
 sessions that hold `device` get a short block from

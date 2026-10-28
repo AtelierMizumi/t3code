@@ -149,15 +149,15 @@ const VALUE_FLAGS: ReadonlyArray<string> = [
 ];
 
 // Help gets no bound flags (agent-device reads --config even for help); only args before `--` are flags.
-// agent-device 0.21.31 refuses some bound flags per command, and connect/disconnect/auth/daemon would
-// replace T3's connection. It reports a sandboxed shell and a dropped tunnel alike, so check first.
+// agent-device 0.21.31 refuses some bound flags per command; connect/disconnect/auth/daemon would
+// replace T3's connection, and device status reads this machine's claims. It reports a sandboxed shell and a dropped tunnel alike, so check first.
 const launcherSource = (node: string, entryPath: string, boundArgs: ReadonlyArray<string>) =>
   `import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { connect } from "node:net";
 const entry = ${JSON.stringify(entryPath)};
 const bound = ${JSON.stringify(boundArgs)};
-const refused = new Map([["cdp", ["--platform", "--udid", "--config", "--session"]], ["device", ["--session"]], ["connection", ["--platform", "--udid"]]]);
+const refused = new Map([["cdp", ["--platform", "--udid", "--config", "--session"]], ["connection", ["--platform", "--udid"]]]);
 const managed = ["connect", "disconnect", "auth", "daemon"];
 const args = process.argv.slice(2);
 const end = args.indexOf("--");
@@ -173,6 +173,10 @@ for (let index = 0; index < args.length; index++) {
 const informational = args.length === 0 || ["help", "--help", "-h", "--version", "version"].includes(args[0]) || options.includes("--help") || options.includes("-h");
 if (!informational && managed.includes(name)) {
   console.error("T3 Code manages this command's connection to the device, so \`" + name + "\` is not available through it.");
+  process.exit(1);
+}
+if (!informational && name === "device") {
+  console.error("\`device status\` reads this machine's device claims, not those on the device's host, so it is not available through this command. Quote the DEVICE_IN_USE error instead.");
   process.exit(1);
 }
 const skip = refused.get(name) ?? [];
@@ -202,7 +206,7 @@ if (local) {
     process.exit(1);
   }
   if (failure) {
-    console.error("T3 Code's connection to this device's host (" + local.host + ") is not running. Call device_open again to reconnect.");
+    console.error("T3 Code's device connection at " + local.host + " is not reachable from this shell (connect " + failure + "). Call device_open again to reconnect; if that succeeds and this repeats, this shell runs in a network sandbox, so run the command with network access, outside the sandbox.");
     process.exit(1);
   }
 }

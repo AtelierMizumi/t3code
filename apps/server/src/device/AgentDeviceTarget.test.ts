@@ -207,16 +207,6 @@ exec '${process.execPath.replaceAll("'", "'\"'\"'")}' "$@"
       // agent-device 0.21.31 rejects these flags with "unknown option" or "not supported for command".
       const cdp = ["cdp", "target", "list", "--url", "http://127.0.0.1:8081"];
       expect(yield* Effect.promise(() => launch(cdp))).toEqual(cdp);
-      expect(yield* Effect.promise(() => launch(["device", "status"]))).toEqual([
-        "device",
-        "status",
-        "--platform",
-        "ios",
-        "--udid",
-        "UDID-1",
-        "--config",
-        "/h.json",
-      ]);
       expect(yield* Effect.promise(() => launch(["connection"]))).toEqual([
         "connection",
         "--config",
@@ -226,15 +216,18 @@ exec '${process.execPath.replaceAll("'", "'\"'\"'")}' "$@"
       ]);
       // The command is found past leading flags and their values, in either form.
       for (const config of [["--config", "/o.json"], ["--config=/o.json"]]) {
-        expect(yield* Effect.promise(() => launch([...config, "device", "status"]))).toEqual([
+        expect(yield* Effect.promise(() => launch([...config, "connection"]))).toEqual([
           ...config,
-          "device",
-          "status",
-          "--platform",
-          "ios",
-          "--udid",
-          "UDID-1",
+          "connection",
+          "--session",
+          "t3-a",
         ]);
+        // device status reads claims on the machine it runs on, which is not the device's host.
+        yield* Effect.promise(() =>
+          expect(launch([...config, "device", "status"])).rejects.toThrow(
+            "`device status` reads this machine's device claims, not those on the device's host",
+          ),
+        );
       }
       expect(yield* Effect.promise(() => launch(["--json", ...cdp]))).toEqual(["--json", ...cdp]);
       for (const managed of [
@@ -317,7 +310,7 @@ exec '${process.execPath.replaceAll("'", "'\"'\"'")}' "$@"
         expect(launch(["screenshot", "/tmp/shot.png"])).rejects.toMatchObject({
           code: 1,
           stdout: "",
-          stderr: `T3 Code's connection to this device's host (127.0.0.1:${port}) is not running. Call device_open again to reconnect.\n`,
+          stderr: `T3 Code's device connection at 127.0.0.1:${port} is not reachable from this shell (connect ECONNREFUSED). Call device_open again to reconnect; if that succeeds and this repeats, this shell runs in a network sandbox, so run the command with network access, outside the sandbox.\n`,
         }),
       );
       // cdp talks to Metro, not to T3's connection, so it still runs.
