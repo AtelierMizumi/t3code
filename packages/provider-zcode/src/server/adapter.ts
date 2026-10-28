@@ -693,8 +693,14 @@ export const makeZcodeAdapterV2 = Effect.fn("makeZcodeAdapterV2")(function* (
         yield* updateThread(state, { status: "idle" });
         yield* updateSession(outcome === "failed" ? "error" : "ready", failureMessage);
         if (outcome === "failed") {
+          const rawMessage = failureMessage ?? "ZCode turn failed.";
+          const message = /select a model/i.test(rawMessage)
+            ? "ZCode 3.16+ only resolves coding-plan models inside its own desktop runtime; " +
+              "the spawned app-server cannot select a plan model. Update the ZCode desktop app, " +
+              "or use the coding-plan API key with an Anthropic-compatible provider instead."
+            : rawMessage;
           const failure: OrchestrationV2ProviderFailure = makeProviderFailure({
-            message: failureMessage ?? "ZCode turn failed.",
+            message,
             class: "provider_error",
             retryable: false,
           });
@@ -1223,8 +1229,14 @@ export const makeZcodeAdapterV2 = Effect.fn("makeZcodeAdapterV2")(function* (
           yield* connection
             .request("session/setMode", { sessionId: state.zcodeSessionId, mode })
             .pipe(Effect.mapError(startError));
+          // Model switching is best-effort: a rejected selection must not
+          // fail the turn — the session keeps ZCode's own plan default.
           yield* applyModelSelection(state, turnInput.modelSelection).pipe(
-            Effect.mapError(startError),
+            Effect.catch((cause) =>
+              Effect.logWarning("ZCode rejected the model selection; using the plan default.", {
+                cause,
+              }),
+            ),
           );
 
           const content = buildTurnMessageContent(
