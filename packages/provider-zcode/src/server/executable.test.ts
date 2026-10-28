@@ -32,6 +32,26 @@ describe("resolveZcodeCliPath", () => {
     expect(resolved.endsWith("zcode.cjs") || resolved === "zcode").toBe(true);
   });
 
+  it("flags ELECTRON_RUN_AS_NODE when the runtime is Electron", () => {
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "zcode-exec-"));
+    const cjs = NodePath.join(dir, "zcode.cjs");
+    NodeFS.writeFileSync(cjs, "console.log('ok')\n");
+    const argv = buildZcodeAppServerArgv({
+      binaryPath: cjs,
+      env: {},
+      platform: "linux",
+      electronVersion: "37.2.0",
+    });
+    expect(argv.envExtras).toEqual({ ELECTRON_RUN_AS_NODE: "1" });
+    const plain = buildZcodeAppServerArgv({
+      binaryPath: cjs,
+      env: {},
+      platform: "linux",
+      electronVersion: undefined,
+    });
+    expect(plain.envExtras).toBeUndefined();
+  });
+
   it("builds an app-server argv that forces the desktop surface", () => {
     const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "zcode-exec-"));
     const cjs = NodePath.join(dir, "zcode.cjs");

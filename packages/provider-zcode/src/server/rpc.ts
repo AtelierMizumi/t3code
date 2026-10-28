@@ -256,7 +256,10 @@ export const makeZcodeRpcConnection = Effect.fnUntraced(function* (input: ZcodeR
     platform: input.platform,
   });
   const plan = readZcodeDesktopPlan(input.env);
-  const env = buildZcodeDesktopSpawnEnv(input.env, plan);
+  const env = {
+    ...buildZcodeDesktopSpawnEnv(input.env, plan),
+    ...(argv.envExtras ?? {}),
+  };
 
   const child = yield* spawner
     .spawn(
@@ -354,7 +357,7 @@ export const makeZcodeRpcConnection = Effect.fnUntraced(function* (input: ZcodeR
     Effect.suspend(() => {
       if (childExited || transportFailed) {
         return Effect.fail(
-          new ZcodeRpcError({ operation: "write", detail: "ZCode app-server is closed." }),
+          new ZcodeRpcError({ operation: "write", detail: "ZCode app-server is closed" }),
         );
       }
       return writeRecord(record);
@@ -429,7 +432,7 @@ export const makeZcodeRpcConnection = Effect.fnUntraced(function* (input: ZcodeR
         failTransport(
           new ZcodeRpcError({
             operation: "read",
-            detail: "ZCode app-server stdout failed.",
+            detail: "ZCode app-server stdout failed",
             cause,
           }),
         ),
@@ -437,7 +440,7 @@ export const makeZcodeRpcConnection = Effect.fnUntraced(function* (input: ZcodeR
         failTransport(
           new ZcodeRpcError({
             operation: "read",
-            detail: "ZCode app-server stdout closed.",
+            detail: "ZCode app-server stdout closed",
           }),
         ),
     }),
@@ -518,7 +521,7 @@ export const zcodeCreateSession = Effect.fn("ZcodeRpc.zcodeCreateSession")(funct
   if (!created.sessionId) {
     return yield* new ZcodeRpcError({
       operation: "session/create",
-      detail: "ZCode session/create did not return a sessionId.",
+      detail: "ZCode session/create did not return a sessionId",
     });
   }
   yield* connection.request("session/subscribe", {

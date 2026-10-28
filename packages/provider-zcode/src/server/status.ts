@@ -1,6 +1,7 @@
 import {
   type CustomModelSetting,
   type ModelCapabilities,
+  type ServerProviderAuth,
   type ServerProviderModel,
 } from "@t3tools/contracts";
 import type { ZcodeSettings } from "../settings.ts";
@@ -24,7 +25,7 @@ import {
 } from "@t3tools/provider-core/server/snapshotProbe";
 
 import { buildZcodeAppServerArgv, isZcodeNodeBundle } from "./executable.ts";
-import { readZcodeDesktopPlan } from "./desktopAuth.ts";
+import { hasAnyZcodeCredential, readZcodeDesktopPlan } from "./desktopAuth.ts";
 
 export const ZCODE_PRESENTATION = {
   displayName: "ZCode",
@@ -52,6 +53,12 @@ const ZCODE_BUILTIN_MODELS: ReadonlyArray<ServerProviderModel> = [
     capabilities: EMPTY_MODEL_CAPABILITIES,
   },
   {
+    slug: "GLM-5.3-Flash",
+    name: "GLM-5.3 Flash",
+    isCustom: false,
+    capabilities: EMPTY_MODEL_CAPABILITIES,
+  },
+  {
     slug: "GLM-5.2",
     name: "GLM-5.2",
     isCustom: false,
@@ -75,12 +82,21 @@ function buildZcodeVersionArgv(
   binaryPath: string | null | undefined,
   env: NodeJS.ProcessEnv,
   platform: NodeJS.Platform,
-): { readonly command: string; readonly args: ReadonlyArray<string> } {
+): {
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  readonly envExtras?: Readonly<Record<string, string>>;
+} {
   const appServer = buildZcodeAppServerArgv({ binaryPath, env, platform });
   const bundlePath = appServer.args[0];
   if (bundlePath !== undefined && isZcodeNodeBundle(bundlePath)) {
     // Node bundles take `node zcode.cjs --version`; asking the app-server for a version boots a server.
-    return { command: appServer.command, args: [bundlePath, "--version"] };
+    // Without ELECTRON_RUN_AS_NODE the Electron binary would print its own app version instead.
+    return {
+      command: appServer.command,
+      args: [bundlePath, "--version"],
+      ...(appServer.envExtras ?? {}),
+    };
   }
   return { command: appServer.command, args: ["--version"] };
 }
@@ -97,7 +113,7 @@ const runZcodeVersionProbe = Effect.fn("ZcodeProviderStatus.runZcodeVersionProbe
   return yield* spawnAndCollect(
     argv.command,
     ChildProcess.make(spawnCommand.command, spawnCommand.args, {
-      env: environment,
+      env: { ...environment, ...(argv.envExtras ?? {}) },
       shell: spawnCommand.shell,
     }),
   );
@@ -234,6 +250,18 @@ export const checkZcodeProviderStatus = Effect.fn("checkZcodeProviderStatus")(fu
     },
   });
 });
+
+function resolveAuthStatus(
+  plan: ReturnType<typeof readZcodeDesktopPlan>,
+  environment: NodeJS.ProcessEnv,
+): ServerProviderAuth {
+  if (plan !== null) {
+    return { status: plan.authenticated ? "authenticated" : "unauthenticated" };
+  }
+  // Newer ZCode builds keep no readable provider config; a credentials file
+  // with entries means the app holds some sign-in.
+  return { status: hasAnyZcodeCredential(environment) ? "authenticated" : "unknown" };
+}
 
 export const enrichZcodeSnapshot = (
   snapshot: ServerProviderDraft,

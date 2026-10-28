@@ -85,6 +85,15 @@ export function hasZcodeProviderCredential(credentials: unknown, providerId: str
   );
 }
 
+/**
+ * Newer ZCode builds store no readable provider/model config, so the plan
+ * cannot be located; the credentials file is the remaining auth signal.
+ */
+export function hasAnyZcodeCredential(env: NodeJS.ProcessEnv = process.env): boolean {
+  const credentials = readJsonFile(NodePath.join(zcodeHome(env), "v2", "credentials.json"));
+  return Predicate.isObject(credentials) && Object.keys(credentials).length > 0;
+}
+
 export function readZcodeDesktopPlan(
   env: NodeJS.ProcessEnv = process.env,
 ): ZcodeDesktopPlan | null {

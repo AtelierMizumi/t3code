@@ -159,16 +159,31 @@ export function resolveZcodeNodeBinary(env: NodeJS.ProcessEnv = process.env): st
   return process.execPath;
 }
 
+/** Inside a packaged Electron sidecar, execPath is the Electron binary, not node. */
+export function isElectronRuntime(electronVersion: string | undefined): boolean {
+  return electronVersion !== undefined;
+}
+
 export function buildZcodeAppServerArgv(input: {
   readonly binaryPath: string | null | undefined;
   readonly env: NodeJS.ProcessEnv;
   readonly platform: NodeJS.Platform;
-}): { readonly command: string; readonly args: ReadonlyArray<string> } {
+  readonly electronVersion?: string | undefined;
+}): {
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  /** Set when execPath is an Electron binary that must run the bundle as plain node. */
+  readonly envExtras?: Readonly<Record<string, string>>;
+} {
   const cliPath = resolveZcodeCliPath(input.binaryPath, input.env, input.platform);
   if (isZcodeNodeBundle(cliPath)) {
+    const command = resolveZcodeNodeBinary(input.env);
     return {
-      command: resolveZcodeNodeBinary(input.env),
+      command,
       args: [cliPath, "app-server", "--surface", "desktop"],
+      ...(isElectronRuntime(input.electronVersion ?? process.versions?.electron)
+        ? { envExtras: { ELECTRON_RUN_AS_NODE: "1" } }
+        : {}),
     };
   }
   return {
