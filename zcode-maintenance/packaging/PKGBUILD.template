@@ -48,8 +48,10 @@ conflicts=('t3code')
 options=('!debug' '!strip')
 
 _appimage="__APPIMAGE_NAME__"
-source=("$_appimage")
-sha256sums=('__APPIMAGE_SHA256__')
+source=("$_appimage"
+        "LICENSE")
+sha256sums=('__APPIMAGE_SHA256__'
+            '__LICENSE_SHA256__')
 
 prepare() {
   chmod +x "$srcdir/$_appimage"

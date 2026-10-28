@@ -10,7 +10,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PACKAGING_DIR="$REPO_ROOT/zcode-maintenance/packaging"
 BUILD_DIR="$PACKAGING_DIR/build"
-APPIMAGE="${1:-$REPO_ROOT/apps/desktop/dist/t3-code/T3-Code-*-x86_64.AppImage}"
+# electron-builder writes to <repo>/release/ on Linux; older layout kept as fallback.
+APPIMAGE="${1:-$REPO_ROOT/release/T3-Code-*-x86_64.AppImage}"
 LICENSE="$REPO_ROOT/LICENSE"
 
 shopt -s nullglob
@@ -26,6 +27,7 @@ APPIMAGE_PATH="${APPIMAGE_PATHS[0]}"
 PKGVER="$(node -p "require('$REPO_ROOT/apps/desktop/package.json').version")"
 APPIMAGE_NAME="$(basename "$APPIMAGE_PATH")"
 SHA256="$(sha256sum "$APPIMAGE_PATH" | cut -d' ' -f1)"
+LICENSE_SHA256="$(sha256sum "$LICENSE" | cut -d' ' -f1)"
 
 echo "==> pkgver $PKGVER, artifact $APPIMAGE_NAME (sha256 ${SHA256:0:12}...)"
 
@@ -37,6 +39,7 @@ cp "$LICENSE" "$BUILD_DIR/LICENSE"
 sed -e "s/__PKGVER__/$PKGVER/g" \
     -e "s/__APPIMAGE_NAME__/$APPIMAGE_NAME/g" \
     -e "s/__APPIMAGE_SHA256__/$SHA256/g" \
+    -e "s/__LICENSE_SHA256__/$LICENSE_SHA256/g" \
     "$PACKAGING_DIR/PKGBUILD.template" > "$BUILD_DIR/PKGBUILD"
 
 cd "$BUILD_DIR"
