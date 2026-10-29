@@ -20,6 +20,16 @@ If Settings shows ZCode as installed but unauthenticated, sign in with the ZCode
 
 T3 Code streams assistant text and reasoning as they arrive and renders tool activity while the turn runs. Command approvals and structured questions asked by ZCode appear as blocking prompts in the composer, and answers go back to the running agent. Threads persist through T3 Code restarts via ZCode's native session ids and resume with the same conversation. ZCode's plan mode is available as an interaction mode for individual turns.
 
+## Using the Coding-Plan API Key
+
+ZCode 3.16+ only resolves coding-plan models inside its own desktop runtime.
+To run sessions through the spawned CLI, create a coding-plan API key from
+Z.AI's API-key management page and paste it into ZCode's **Coding plan API
+key** setting. T3 Code then declares the `zai-api` provider
+(Anthropic-compatible, offering `GLM-5.3` and `GLM-5.3 Flash`) inside
+ZCode's own provider stack, and usage bills to your coding plan. The key is
+stored in a T3-owned config file and is never written into `~/.zcode`.
+
 ## Limitations
 
 - Conversation rollback, forks, and subagent management are not exposed; T3 Code falls back to portable context handoff where applicable.

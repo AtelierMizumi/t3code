@@ -12,6 +12,7 @@ import {
   enrichZcodeSnapshot,
 } from "./status.ts";
 import { makeZcodeTextGeneration } from "./textGeneration.ts";
+import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import { makeManagedServerProvider } from "@t3tools/provider-core/server/managedProvider";
 import {
   defaultProviderContinuationIdentity,
@@ -71,6 +72,7 @@ export const ZcodeDriver: ProviderDriver<ZcodeSettings, ZcodeDriverEnv> = {
     config,
   }) {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const host = yield* ProviderHost.ProviderHost;
     const processEnv = yield* mergeProviderInstanceEnvironment(environment);
     const continuationIdentity = defaultProviderContinuationIdentity({
       driverKind: DRIVER_KIND,
@@ -102,7 +104,9 @@ export const ZcodeDriver: ProviderDriver<ZcodeSettings, ZcodeDriverEnv> = {
           }),
       ),
     );
-    const textGeneration = yield* makeZcodeTextGeneration(effectiveConfig, processEnv).pipe(
+    const textGeneration = yield* makeZcodeTextGeneration(effectiveConfig, processEnv, {
+      cacheDir: host.paths.providerStatusCacheDir,
+    }).pipe(
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       Effect.mapError(
         (cause) =>

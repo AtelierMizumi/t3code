@@ -156,3 +156,121 @@ export function buildZcodeDesktopSpawnEnv(
   }
   return env;
 }
+
+/** Registry builtin config shipped by the ZCode desktop app's cloud sync. */
+export function resolveZcodeBuiltinConfigFile(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const explicit = env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE?.trim();
+  if (explicit) return existingFile(explicit);
+  const pattern = NodePath.join(
+    zcodeHome(env),
+    "v2",
+    "runtime",
+    "provider",
+    "*",
+    "*",
+    "*",
+    "zcode-builtin.json",
+  );
+  try {
+    const candidates = NodeFS.globSync(pattern);
+    if (candidates.length === 0) return undefined;
+    return candidates
+      .map((path) => ({ path, mtime: NodeFS.statSync(path).mtimeMs }))
+      .sort((a, b) => b.mtime - a.mtime)[0]?.path;
+  } catch {
+    return undefined;
+  }
+}
+
+function existingFile(path: string | undefined): string | undefined {
+  if (!path) return undefined;
+  try {
+    return NodeFS.statSync(path).isFile() ? path : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Declare the `zai-api` provider in a T3-owned personal provider config that
+ * points at the shared `zai-api` template (Anthropic-compatible, billed to the
+ * coding plan). The shared credentials file is never written; the personal
+ * rule lives in `<cacheDir>/zcode-personal-provider-config.json` and only that
+ * path is exported to the spawned app-server via
+ * ZCODE_PERSONAL_PROVIDER_CONFIG_FILE.
+ */
+export function writeZcodePersonalProviderConfig(input: {
+  readonly cacheDir: string;
+  readonly apiKey: string;
+  readonly env?: NodeJS.ProcessEnv | undefined;
+}): string | undefined {
+  const sharedPath = NodePath.join(zcodeHome(input.env), "v2", "provider_config.json");
+  let base: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(NodeFS.readFileSync(sharedPath, "utf8"));
+    if (Predicate.isObject(parsed)) base = parsed;
+  } catch {
+    // No shared personal config yet; start from the documented skeleton.
+  }
+  const config = Predicate.isObject(base.config) ? { ...base.config } : {};
+  const rules = Predicate.isObject(config.providerConfigRules)
+    ? { ...config.providerConfigRules }
+    : {};
+  const providerRules = Array.isArray(rules.providerRules)
+    ? rules.providerRules.filter(
+        (rule) => !(Predicate.isObject(rule) && rule.providerId === "zai-api"),
+      )
+    : [];
+  providerRules.push({
+    providerId: "zai-api",
+    templateId: "zai-api",
+    config: {
+      group: "standard-personal",
+      access: { type: "zhipu-coding-plan-api-key", apiKey: input.apiKey },
+    },
+  });
+  rules.providerRules = providerRules;
+  config.providerConfigRules = rules;
+  if (!Predicate.isObject(config.modelConfigRules)) {
+    config.modelConfigRules = { providerModelRules: [], manualProviderModelRules: [] };
+  }
+
+  const out = {
+    ...(Predicate.isObject(base) ? base : {}),
+    schemaVersion: 1,
+    config,
+  };
+  try {
+    NodeFS.mkdirSync(input.cacheDir, { recursive: true });
+    const target = NodePath.join(input.cacheDir, "zcode-personal-provider-config.json");
+    NodeFS.writeFileSync(target, JSON.stringify(out, null, 2), "utf8");
+    return target;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Env vars that hand the spawned app-server the provider registry configs. */
+export function buildZcodeProviderConfigEnv(input: {
+  readonly cacheDir: string;
+  readonly apiKey: string | null | undefined;
+  readonly env?: NodeJS.ProcessEnv | undefined;
+}): Record<string, string> {
+  const env: Record<string, string> = {};
+  const builtin = resolveZcodeBuiltinConfigFile(input.env);
+  if (builtin) env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE = builtin;
+  if (input.apiKey?.trim()) {
+    const personal = writeZcodePersonalProviderConfig({
+      cacheDir: input.cacheDir,
+      apiKey: input.apiKey.trim(),
+      env: input.env,
+    });
+    if (personal) env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE = personal;
+  }
+  return env;
+}
+
+/** Provider id to select models on when the coding-plan API key path is active. */
+export const ZCODE_API_TEMPLATE_PROVIDER_ID = "zai-api";

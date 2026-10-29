@@ -20,7 +20,7 @@ import {
   zcodeRecordString,
   type ZcodeRpcConnection,
 } from "./rpc.ts";
-import { readZcodeDesktopPlan } from "./desktopAuth.ts";
+import { buildZcodeProviderConfigEnv, ZCODE_API_TEMPLATE_PROVIDER_ID } from "./desktopAuth.ts";
 import * as TextGenerationOperations from "@t3tools/provider-core/server/textGenerationOperations";
 
 const ZCODE_TIMEOUT_MS = 180_000;
@@ -77,9 +77,21 @@ const drainUntilTerminal = Effect.fn("ZcodeTextGeneration.drainUntilTerminal")(f
 export const makeZcodeTextGeneration = Effect.fn("makeZcodeTextGeneration")(function* (
   zcodeSettings: ZcodeSettings,
   environment: NodeJS.ProcessEnv = process.env,
+  options?: { readonly cacheDir?: string },
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const platform = yield* HostProcess.Platform;
+  const apiKey = zcodeSettings.apiKey?.trim() ?? "";
+  const providerEnv: NodeJS.ProcessEnv = {
+    ...environment,
+    ...(apiKey && options?.cacheDir
+      ? buildZcodeProviderConfigEnv({
+          cacheDir: options.cacheDir,
+          apiKey,
+          env: environment,
+        })
+      : {}),
+  };
 
   const runZcodeJson: TextGenerationOperations.Runner = Effect.fn(
     "ZcodeTextGeneration.runZcodeJson",
@@ -89,11 +101,10 @@ export const makeZcodeTextGeneration = Effect.fn("makeZcodeTextGeneration")(func
       const connection: ZcodeRpcConnection = yield* makeZcodeRpcConnection({
         binaryPath: zcodeSettings.binaryPath,
         cwd,
-        env: environment,
+        env: providerEnv,
         platform,
       }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
 
-      const plan = readZcodeDesktopPlan(environment);
       const requestedModel = resolveZcodeModelSlug(modelSelection.model);
       // Ephemeral background sessions must never touch the workspace: plan
       // mode keeps the model from running tools while it answers.
@@ -101,7 +112,7 @@ export const makeZcodeTextGeneration = Effect.fn("makeZcodeTextGeneration")(func
         cwd,
         mode: "plan",
         ...(requestedModel ? { modelId: requestedModel } : {}),
-        ...(plan?.providerId ? { providerId: plan.providerId } : {}),
+        ...(apiKey ? { providerId: ZCODE_API_TEMPLATE_PROVIDER_ID } : {}),
       }).pipe(
         Effect.mapError(
           (cause) =>

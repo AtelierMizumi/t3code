@@ -254,7 +254,11 @@ export const checkZcodeProviderStatus = Effect.fn("checkZcodeProviderStatus")(fu
 function resolveAuthStatus(
   plan: ReturnType<typeof readZcodeDesktopPlan>,
   environment: NodeJS.ProcessEnv,
+  apiKey: string | undefined,
 ): ServerProviderAuth {
+  if (apiKey?.trim()) {
+    return { status: "authenticated", label: "Coding plan API key" };
+  }
   if (plan !== null) {
     return { status: plan.authenticated ? "authenticated" : "unauthenticated" };
   }

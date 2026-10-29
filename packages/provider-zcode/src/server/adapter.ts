@@ -39,7 +39,11 @@ import {
   type ProviderAdapterDriverCreateInput,
 } from "@t3tools/provider-core/server/adapterDriver";
 
-import { readZcodeDesktopPlan } from "./desktopAuth.ts";
+import {
+  buildZcodeProviderConfigEnv,
+  readZcodeDesktopPlan,
+  ZCODE_API_TEMPLATE_PROVIDER_ID,
+} from "./desktopAuth.ts";
 import {
   handleBuiltinZcodeServerRequest,
   makeZcodeRpcConnection,
@@ -328,10 +332,25 @@ export const makeZcodeAdapterV2 = Effect.fn("makeZcodeAdapterV2")(function* (
       const scope = yield* Effect.scope;
       const providerSessionId: ProviderSessionId = input.providerSessionId;
       const cwd = input.runtimePolicy.cwd ?? host.paths.cwd;
+      const plan = readZcodeDesktopPlan(options.environment);
+      const apiKey = options.settings.apiKey?.trim() ?? "";
+      const spawnEnv: NodeJS.ProcessEnv = {
+        ...options.environment,
+        ...(apiKey
+          ? buildZcodeProviderConfigEnv({
+              cacheDir: host.paths.providerStatusCacheDir,
+              apiKey,
+              env: options.environment,
+            })
+          : {}),
+      };
+      // With the coding-plan API key the registry resolves the template
+      // provider; otherwise only the desktop plan binding (if any) applies.
+      const selectionProviderId = apiKey ? ZCODE_API_TEMPLATE_PROVIDER_ID : plan?.providerId;
       const connection: ZcodeRpcConnection = yield* makeZcodeRpcConnection({
         binaryPath: options.settings.binaryPath,
         cwd,
-        env: options.environment,
+        env: spawnEnv,
         platform,
       }).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
@@ -345,7 +364,6 @@ export const makeZcodeAdapterV2 = Effect.fn("makeZcodeAdapterV2")(function* (
         ),
       );
 
-      const plan = readZcodeDesktopPlan(options.environment);
       const now = yield* DateTime.now;
       let sessionEntity: OrchestrationV2ProviderSession = {
         id: providerSessionId,
