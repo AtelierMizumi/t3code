@@ -1035,7 +1035,7 @@ export const makeZcodeAdapterV2 = Effect.fn("makeZcodeAdapterV2")(function* (
                 cwd: sessionCwd,
                 mode,
                 ...(requestedModel ? { modelId: requestedModel } : {}),
-                ...(plan?.providerId ? { providerId: plan.providerId } : {}),
+                ...(selectionProviderId ? { providerId: selectionProviderId } : {}),
               })
         ).pipe(Effect.mapError(fail));
         const createdAt = yield* DateTime.now;
@@ -1108,7 +1108,7 @@ export const makeZcodeAdapterV2 = Effect.fn("makeZcodeAdapterV2")(function* (
           sessionId: state.zcodeSessionId,
           model: {
             modelId: requested,
-            ...(plan?.providerId ? { providerId: plan.providerId } : {}),
+            ...(selectionProviderId ? { providerId: selectionProviderId } : {}),
           },
         });
         state.appliedModelId = requested;
