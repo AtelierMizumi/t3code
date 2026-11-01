@@ -86,6 +86,13 @@ export function resolveModelPickerSelectedModel(input: {
   model: string;
   options: ReadonlyArray<ModelEsque>;
 }) {
+  if (input.driverKind === "auto_orchestrator" || input.model === "hybrid-router") {
+    return {
+      slug: "hybrid-router",
+      name: "⚡ Auto (Multi-Tier Orchestrator)",
+      shortName: "⚡ Auto",
+    };
+  }
   if (input.driverKind === "antigravity" && input.model === ANTIGRAVITY_DEFAULT_MODEL) {
     const availableModels = input.options.filter(
       (option) => option.slug !== ANTIGRAVITY_DEFAULT_MODEL && !option.isUnavailable,
@@ -482,6 +489,10 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     if (getModelDisabledReason?.(instanceId, modelSlug)) {
       return null;
     }
+    if (instanceId === "auto_orchestrator") {
+      onInstanceModelChange(instanceId, modelSlug);
+      return modelSlug;
+    }
     const options = modelOptionsByInstance.get(instanceId);
     if (!options) {
       return null;
@@ -573,6 +584,17 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
             : {}),
         });
       }
+    }
+    if (out.length > 0 && lockedProvider === null) {
+      out.unshift({
+        slug: "hybrid-router",
+        name: "⚡ Auto (Multi-Tier Orchestrator)",
+        shortName: "⚡ Auto",
+        instanceId: "auto_orchestrator" as ProviderInstanceId,
+        driverKind: "auto_orchestrator" as ProviderDriverKind,
+        instanceDisplayName: "Auto Orchestrator",
+        badge: "new",
+      });
     }
     return out;
   })();
