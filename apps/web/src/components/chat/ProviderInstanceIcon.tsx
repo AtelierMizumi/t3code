@@ -102,7 +102,7 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
       data-provider-accent-color={accentColor}
     >
       {props.driverKind === "auto_orchestrator" ? (
-        <Zap className={cn("size-5 shrink-0 text-amber-500", iconClassName)} aria-hidden />
+        <Zap className={cn("size-5 shrink-0 text-warning", iconClassName)} aria-hidden />
       ) : isAcpRegistry ? (
         <AcpRegistryAgentIcon
           className={cn("size-5 rounded-none bg-transparent", iconClassName)}

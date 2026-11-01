@@ -37,11 +37,12 @@ const handlers = {
         includeTranscript: includeTranscript ?? false,
       });
     }).pipe(
-      Effect.catchTag("AdvisorError", (error: AdvisorError) =>
-        Effect.fail(
-          new OrchestratorMcpFailure({ code: "orchestration_error", message: error.message }),
-        ),
-      ),
+      Effect.catchTags({
+        AdvisorError: (error: AdvisorError) =>
+          Effect.fail(
+            new OrchestratorMcpFailure({ code: "orchestration_error", message: error.message }),
+          ),
+      }),
     ),
   ),
   task_status: McpToolAccess.actsAsCaller(({ taskId }) =>

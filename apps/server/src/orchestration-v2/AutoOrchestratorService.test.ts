@@ -3,7 +3,6 @@ import { ModelSelection, ProviderInstanceId, ThreadId } from "@t3tools/contracts
 import * as Effect from "effect/Effect";
 import {
   AutoOrchestratorService,
-  DEFAULT_AUTO_ORCHESTRATOR_TIER_CONFIG,
   layer as AutoOrchestratorServiceLive,
 } from "./AutoOrchestratorService.ts";
 
@@ -11,10 +10,6 @@ describe("AutoOrchestratorService", () => {
   const claudeSelection: ModelSelection = {
     instanceId: ProviderInstanceId.make("claudeAgent"),
     model: "claude-sonnet-5-5",
-  };
-  const geminiSelection: ModelSelection = {
-    instanceId: ProviderInstanceId.make("antigravity"),
-    model: "gemini-3.8-flash-high",
   };
   const flashLowSelection: ModelSelection = {
     instanceId: ProviderInstanceId.make("antigravity"),

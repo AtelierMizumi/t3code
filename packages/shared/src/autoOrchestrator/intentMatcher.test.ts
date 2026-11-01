@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import {
-  classifyPromptIntent,
-  stripRoutingTags,
-  type IntentClassificationResult,
-} from "./intentMatcher.ts";
+import { classifyPromptIntent, stripRoutingTags } from "./intentMatcher.ts";
 
 describe("classifyPromptIntent", () => {
   it("tags @claude without forcing tier 1; the tier comes from the prompt intent", () => {

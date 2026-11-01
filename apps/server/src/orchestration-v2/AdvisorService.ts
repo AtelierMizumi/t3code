@@ -20,7 +20,7 @@ import * as OrchestratorMcpService from "../mcp/OrchestratorMcpService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 
-export const ADVISOR_TARGET = {
+const ADVISOR_TARGET = {
   providerInstanceId: ProviderInstanceId.make("claudeAgent"),
   model: "claude-sonnet-5-5",
 } as const;
