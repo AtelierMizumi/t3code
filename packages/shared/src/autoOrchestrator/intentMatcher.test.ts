@@ -6,10 +6,11 @@ import {
 } from "./intentMatcher.ts";
 
 describe("classifyPromptIntent", () => {
-  it("prioritizes explicit @claude tag override", () => {
+  it("tags @claude without forcing tier 1; the tier comes from the prompt intent", () => {
     const result = classifyPromptIntent("@claude hãy viết regex kiểm tra email");
-    expect(result.tier).toBe(1);
+    expect(result.tier).toBe(3);
     expect(result.overrideTag).toBe("@claude");
+    expect(classifyPromptIntent("@claude review kiến trúc").tier).toBe(1);
   });
 
   it("prioritizes explicit @gemini tag override", () => {

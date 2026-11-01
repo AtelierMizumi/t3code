@@ -68,7 +68,7 @@ describe("resolveDispatchSelection", () => {
     );
   });
 
-  it("turns the @claude tag into an advisor instruction and keeps the tier model", async () => {
+  it("turns the @claude tag into an advisor instruction and keeps the intent tier model", async () => {
     const result = await run({
       commandModelSelection: autoSelection,
       threadModelSelection: autoSelection,
@@ -80,7 +80,24 @@ describe("resolveDispatchSelection", () => {
       "is this race condition safe?\n\n[Advisor] Call consult_advisor for this question before answering.",
     );
     expect(result.text).not.toContain("@claude");
-    expect(result.modelSelection).toEqual(claudeSelection);
+    expect(result.modelSelection?.instanceId).toBe("antigravity");
+  });
+
+  it("keeps the intent tier model for a @claude coding prompt instead of locking on Claude", async () => {
+    const result = await run({
+      commandModelSelection: autoSelection,
+      threadModelSelection: autoSelection,
+      hasRuns: false,
+      text: "@claude fix this bug: server crash",
+      availableProviderInstanceIds: available,
+    });
+    expect(result.modelSelection).toEqual({
+      instanceId: ProviderInstanceId.make("antigravity"),
+      model: "gemini-3.8-flash-high",
+    });
+    expect(result.text).toBe(
+      "fix this bug: server crash\n\n[Advisor] Call consult_advisor for this question before answering.",
+    );
   });
 
   it("uses the thread's selection when the command carries none", async () => {

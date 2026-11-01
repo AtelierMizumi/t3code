@@ -23,7 +23,8 @@ export function stripRoutingTags(prompt: string): string {
 export function classifyPromptIntent(prompt: string): IntentClassificationResult {
   // 1. Tag Override Check
   if (/@claude\b/i.test(prompt)) {
-    return { tier: 1, reason: "Explicit @claude override", overrideTag: "@claude" };
+    // @claude asks for advice, not a model switch, so the tier comes from the prompt itself.
+    return { ...classifyPromptIntent(stripRoutingTags(prompt)), overrideTag: "@claude" };
   }
   if (/@gemini\b/i.test(prompt)) {
     return {
