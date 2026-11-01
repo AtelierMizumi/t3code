@@ -96,6 +96,14 @@ export const layer: Layer.Layer<AutoOrchestratorService> = Layer.succeed(AutoOrc
         chosenTier === 1 ? config.tier1 : chosenTier === 3 ? config.tier3 : config.tier2;
       let reason = classification.reason;
 
+      if (classification.overrideTag === "@zcode") {
+        chosenSelection = {
+          instanceId: ProviderInstanceId.make("zcode"),
+          model: "GLM-5.3",
+        };
+        reason = "Explicit @zcode override";
+      }
+
       // Smart Stickiness: If no explicit tag override, and previous selection is active,
       // and current prompt is a follow-up or default coding intent, stick to previous selection
       if (

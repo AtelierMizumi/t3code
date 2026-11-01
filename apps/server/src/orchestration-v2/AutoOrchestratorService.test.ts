@@ -37,6 +37,20 @@ describe("AutoOrchestratorService", () => {
       expect(result.cleanedPrompt).toBe("thiết kế spec cho module auth");
     }).pipe(Effect.provide(AutoOrchestratorServiceLive), Effect.runPromise));
 
+  it("routes explicit @zcode tag override to zcode provider and cleans prompt", () =>
+    Effect.gen(function* () {
+      const service = yield* AutoOrchestratorService;
+      const result = yield* service.resolveTurnSelection({
+        threadId: ThreadId.make("thread_test_zcode"),
+        promptText: "@zcode giải quyết thuật toán này",
+        availableProviderInstanceIds: defaultAvailable,
+      });
+
+      expect(result.targetSelection.instanceId).toBe("zcode");
+      expect(result.targetSelection.model).toBe("GLM-5.3");
+      expect(result.cleanedPrompt).toBe("giải quyết thuật toán này");
+    }).pipe(Effect.provide(AutoOrchestratorServiceLive), Effect.runPromise));
+
   it("routes architectural intent to Tier 1 with auto-skill instruction", () =>
     Effect.gen(function* () {
       const service = yield* AutoOrchestratorService;
