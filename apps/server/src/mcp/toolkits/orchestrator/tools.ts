@@ -7,6 +7,8 @@ import {
   OrchestratorMcpEnvironmentLinksResult,
   OrchestratorMcpEnvironmentUnlinkInput,
   OrchestratorMcpEnvironmentUnlinkResult,
+  OrchestratorMcpConsultAdvisorInput,
+  OrchestratorMcpConsultAdvisorResult,
   OrchestratorMcpCreateThreadsInput,
   OrchestratorMcpCreateThreadsResult,
   OrchestratorMcpDelegateTaskInput,
@@ -106,20 +108,8 @@ const DelegateTaskTool = Tool.make("delegate_task", {
 const ConsultAdvisorTool = Tool.make("consult_advisor", {
   description:
     "Ask Claude one question in a fresh conversation. Write `brief` with the goal, the relevant code, and the exact question. `includeTranscript` only when the thread is short. Your own model does not change.",
-  parameters: Schema.Struct({
-    question: TrimmedNonEmptyString,
-    brief: TrimmedNonEmptyString,
-    includeTranscript: Schema.optional(Schema.Boolean),
-    timeoutMs: Schema.optional(Schema.Finite),
-  }),
-  success: Schema.Union([
-    Schema.Struct({ status: Schema.Literal("answered"), answer: Schema.String }),
-    Schema.Struct({ status: Schema.Literal("pending"), taskId: Schema.String }),
-    Schema.Struct({
-      status: Schema.Literal("rejected"),
-      reason: Schema.Literals(["transcript_too_long", "advisor_unavailable"]),
-    }),
-  ]),
+  parameters: OrchestratorMcpConsultAdvisorInput,
+  success: OrchestratorMcpConsultAdvisorResult,
   failure: OrchestratorMcpFailure,
   failureMode: "return",
   dependencies: consultAdvisorDependencies,

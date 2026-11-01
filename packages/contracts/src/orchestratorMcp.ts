@@ -240,6 +240,24 @@ export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
 });
 export type OrchestratorMcpDelegateTaskResult = typeof OrchestratorMcpDelegateTaskResult.Type;
 
+export const OrchestratorMcpConsultAdvisorInput = Schema.Struct({
+  question: TrimmedNonEmptyString,
+  brief: TrimmedNonEmptyString,
+  includeTranscript: Schema.optional(Schema.Boolean),
+  timeoutMs: Schema.optional(Schema.Finite),
+});
+export type OrchestratorMcpConsultAdvisorInput = typeof OrchestratorMcpConsultAdvisorInput.Type;
+
+export const OrchestratorMcpConsultAdvisorResult = Schema.Union([
+  Schema.Struct({ status: Schema.Literal("answered"), answer: Schema.String }),
+  Schema.Struct({ status: Schema.Literal("pending"), taskId: Schema.String }),
+  Schema.Struct({
+    status: Schema.Literal("rejected"),
+    reason: Schema.Literals(["transcript_too_long", "advisor_unavailable"]),
+  }),
+]);
+export type OrchestratorMcpConsultAdvisorResult = typeof OrchestratorMcpConsultAdvisorResult.Type;
+
 export const OrchestratorMcpTaskStatusInput = Schema.Struct({
   taskId: NodeId,
 });

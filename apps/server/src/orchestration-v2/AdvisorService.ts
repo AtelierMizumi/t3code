@@ -1,6 +1,7 @@
 import {
   ProviderInstanceId,
   resolveProjectProviderInstanceEnabled,
+  type OrchestratorMcpConsultAdvisorResult,
   type OrchestratorMcpDelegateTaskResult,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -32,10 +33,7 @@ export interface ConsultAdvisorInput {
   readonly timeoutMs?: number | undefined;
 }
 
-export type ConsultAdvisorResult =
-  | { readonly status: "answered"; readonly answer: string }
-  | { readonly status: "pending"; readonly taskId: string }
-  | { readonly status: "rejected"; readonly reason: "transcript_too_long" | "advisor_unavailable" };
+export type ConsultAdvisorResult = OrchestratorMcpConsultAdvisorResult;
 
 export class AdvisorError extends Schema.TaggedError<AdvisorError>()("AdvisorError", {
   message: Schema.String,
