@@ -18,7 +18,7 @@ import * as Layer from "effect/Layer";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import * as OrchestratorMcpService from "../mcp/OrchestratorMcpService.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { consult } from "./AdvisorService.ts";
+import { AdvisorError, consult } from "./AdvisorService.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 
 const parentThreadId = ThreadId.make("thread-parent");
@@ -174,6 +174,42 @@ it.effect("rejects a transcript above the handoff cap before creating a task", (
       includeTranscript: true,
     });
     expect(result).toEqual({ status: "rejected", reason: "transcript_too_long" });
+    expect(delegated).toHaveLength(0);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect.each([
+  { label: "failed", task: taskResult({ status: "failed", summary: "Provider crashed." }) },
+  { label: "cancelled", task: taskResult({ status: "cancelled" }) },
+  { label: "interrupted", task: taskResult({ status: "interrupted" }) },
+  {
+    label: "completed without a summary",
+    task: taskResult({ status: "completed", summary: null }),
+  },
+])("fails instead of answering when the advisor task is $label", ({ task }) => {
+  const { delegated, layer } = harness({ claudeEnabled: true, delegateResult: task });
+  return Effect.gen(function* () {
+    const error = yield* consult({
+      parentThreadId,
+      question: "Is this safe?",
+      brief: "Brief.",
+      includeTranscript: false,
+    }).pipe(Effect.flip);
+    expect(error).toBeInstanceOf(AdvisorError);
+    expect(delegated).toHaveLength(1);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("refuses a consult for a thread other than the caller's before creating a task", () => {
+  const { delegated, layer } = harness({ claudeEnabled: true });
+  return Effect.gen(function* () {
+    const error = yield* consult({
+      parentThreadId: ThreadId.make("thread-other"),
+      question: "Is this safe?",
+      brief: "Brief.",
+      includeTranscript: false,
+    }).pipe(Effect.flip);
+    expect(error).toBeInstanceOf(AdvisorError);
     expect(delegated).toHaveLength(0);
   }).pipe(Effect.provide(layer));
 });
