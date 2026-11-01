@@ -9,9 +9,16 @@ export interface IntentClassificationResult {
   readonly reason: string;
   readonly overrideTag?: string;
   readonly effort?: GeminiEffort;
+  readonly asksAdvisor?: boolean;
 }
 
 const TAG_REGEX = /@(claude|gemini)\b/gi;
+
+const ADVISOR_NATURAL_REGEX =
+  /\b(nhờ claude|hỏi claude|tham vấn|cố vấn|advisor|second opinion|phản biện|chất vấn|cross-check|ask claude|consult claude)\b/i;
+
+const HIGH_RISK_AUDIT_REGEX =
+  /\b(race condition|concurrency|deadlock|thread-safe|thread safe|lỗ hổng bảo mật|security audit|audit security|vulnerability audit)\b/i;
 
 export function stripRoutingTags(prompt: string): string {
   return prompt
@@ -24,7 +31,11 @@ export function classifyPromptIntent(prompt: string): IntentClassificationResult
   // 1. Tag Override Check
   if (/@claude\b/i.test(prompt)) {
     // @claude asks for advice, not a model switch, so the tier comes from the prompt itself.
-    return { ...classifyPromptIntent(stripRoutingTags(prompt)), overrideTag: "@claude" };
+    return {
+      ...classifyPromptIntent(stripRoutingTags(prompt)),
+      overrideTag: "@claude",
+      asksAdvisor: true,
+    };
   }
   if (/@gemini\b/i.test(prompt)) {
     return {
@@ -32,8 +43,11 @@ export function classifyPromptIntent(prompt: string): IntentClassificationResult
       reason: "Explicit @gemini override",
       overrideTag: "@gemini",
       effort: "medium",
+      asksAdvisor: false,
     };
   }
+
+  const asksAdvisor = ADVISOR_NATURAL_REGEX.test(prompt) || HIGH_RISK_AUDIT_REGEX.test(prompt);
 
   // 2. Tier 1: Architecture, Spec, Review, Security, Vulnerability, Grilling
   if (
@@ -46,6 +60,7 @@ export function classifyPromptIntent(prompt: string): IntentClassificationResult
       tier: 1,
       triggeredSkill: isGrilling ? "grilling" : "code-review",
       reason: "Architectural & Review Intent",
+      asksAdvisor,
     };
   }
 
@@ -57,6 +72,7 @@ export function classifyPromptIntent(prompt: string): IntentClassificationResult
       tier: 3,
       reason: "Fast Utility Intent",
       effort: "low",
+      asksAdvisor,
     };
   }
 
@@ -67,6 +83,7 @@ export function classifyPromptIntent(prompt: string): IntentClassificationResult
       triggeredSkill: "systematic-debugging",
       reason: "Debugging Intent",
       effort: "high",
+      asksAdvisor,
     };
   }
 
@@ -77,6 +94,7 @@ export function classifyPromptIntent(prompt: string): IntentClassificationResult
       triggeredSkill: "test-driven-development",
       reason: "Coding & TDD Intent",
       effort: "high",
+      asksAdvisor,
     };
   }
 
@@ -85,5 +103,6 @@ export function classifyPromptIntent(prompt: string): IntentClassificationResult
     tier: 2,
     reason: "Default Coding Workhorse",
     effort: "medium",
+    asksAdvisor,
   };
 }

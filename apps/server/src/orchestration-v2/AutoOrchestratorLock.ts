@@ -1,9 +1,13 @@
 import { AUTO_ORCHESTRATOR_INSTANCE_ID, type ModelSelection, ThreadId } from "@t3tools/contracts";
-import { classifyPromptIntent } from "@t3tools/shared/autoOrchestrator/intentMatcher";
+import {
+  classifyPromptIntent,
+  stripRoutingTags,
+} from "@t3tools/shared/autoOrchestrator/intentMatcher";
 import * as Effect from "effect/Effect";
 import { AutoOrchestratorService } from "./AutoOrchestratorService.ts";
 
-const ADVISOR_INSTRUCTION = "[Advisor] Call consult_advisor for this question before answering.";
+export const ADVISOR_DIRECTIVE =
+  "[Advisor Directive: Independent review recommended. Formulate a precise, self-contained brief of the code and invariants, call the `consult_advisor` tool to get an objective second opinion from Claude Sonnet, and integrate its findings into your final response.]";
 
 export interface ResolveDispatchInput {
   readonly commandModelSelection: ModelSelection | undefined;
@@ -40,11 +44,17 @@ export const resolveDispatchSelection = Effect.fn("AutoOrchestrator.resolveDispa
         reason: "Explicit selection",
       };
     }
+
+    const classification = classifyPromptIntent(input.text);
+    const cleanedText = stripRoutingTags(input.text);
+
     if (threadModelSelection.instanceId !== AUTO_ORCHESTRATOR_INSTANCE_ID) {
       return {
         modelSelection: threadModelSelection,
-        text: input.text,
-        reason: "Thread locked to concrete selection",
+        text: classification.asksAdvisor ? `${cleanedText}\n\n${ADVISOR_DIRECTIVE}` : cleanedText,
+        reason: classification.asksAdvisor
+          ? "Thread locked to concrete selection (with Advisor directive)"
+          : "Thread locked to concrete selection",
       };
     }
 
@@ -54,11 +64,10 @@ export const resolveDispatchSelection = Effect.fn("AutoOrchestrator.resolveDispa
       promptText: input.text,
       availableProviderInstanceIds: input.availableProviderInstanceIds,
     });
-    const asksAdvisor = classifyPromptIntent(input.text).overrideTag === "@claude";
     return {
       modelSelection: resolved.targetSelection,
-      text: asksAdvisor
-        ? `${resolved.cleanedPrompt}\n\n${ADVISOR_INSTRUCTION}`
+      text: classification.asksAdvisor
+        ? `${resolved.cleanedPrompt}\n\n${ADVISOR_DIRECTIVE}`
         : resolved.cleanedPrompt,
       reason: resolved.reason,
     } satisfies ResolveDispatchResult;

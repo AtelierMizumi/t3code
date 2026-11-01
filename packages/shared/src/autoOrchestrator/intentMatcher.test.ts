@@ -2,11 +2,13 @@ import { describe, expect, it } from "vite-plus/test";
 import { classifyPromptIntent, stripRoutingTags } from "./intentMatcher.ts";
 
 describe("classifyPromptIntent", () => {
-  it("tags @claude without forcing tier 1; the tier comes from the prompt intent", () => {
+  it("tags @claude without forcing tier 1; sets asksAdvisor to true", () => {
     const result = classifyPromptIntent("@claude hãy viết regex kiểm tra email");
     expect(result.tier).toBe(3);
     expect(result.overrideTag).toBe("@claude");
+    expect(result.asksAdvisor).toBe(true);
     expect(classifyPromptIntent("@claude review kiến trúc").tier).toBe(1);
+    expect(classifyPromptIntent("@claude review kiến trúc").asksAdvisor).toBe(true);
   });
 
   it("prioritizes explicit @gemini tag override", () => {
@@ -18,6 +20,36 @@ describe("classifyPromptIntent", () => {
   it("does not treat @deepseek or @zcode as routing tags", () => {
     expect(classifyPromptIntent("@deepseek viết regex email").overrideTag).toBeUndefined();
     expect(classifyPromptIntent("@zcode giải quyết thuật toán").overrideTag).toBeUndefined();
+  });
+
+  it("detects natural language advisor intent without needing @ tags", () => {
+    expect(classifyPromptIntent("nhờ claude xem giúp tôi đoạn logic này").asksAdvisor).toBe(true);
+    expect(
+      classifyPromptIntent("cho tôi second opinion về race condition ở queue này").asksAdvisor,
+    ).toBe(true);
+    expect(classifyPromptIntent("cần tham vấn cố vấn về mô hình dữ liệu").asksAdvisor).toBe(true);
+    expect(classifyPromptIntent("phản biện giúp tôi thiết kế hệ thống này").asksAdvisor).toBe(true);
+    expect(
+      classifyPromptIntent("ask claude for a second opinion on this architecture").asksAdvisor,
+    ).toBe(true);
+  });
+
+  it("detects high-risk concurrency and security audit as asksAdvisor", () => {
+    expect(classifyPromptIntent("kiểm tra race condition trong worker pool").asksAdvisor).toBe(
+      true,
+    );
+    expect(
+      classifyPromptIntent("is this thread-safe or does it have a deadlock?").asksAdvisor,
+    ).toBe(true);
+    expect(
+      classifyPromptIntent("security audit và kiểm tra lỗ hổng bảo mật module auth").asksAdvisor,
+    ).toBe(true);
+  });
+
+  it("does not flag routine coding or fast utility as asksAdvisor", () => {
+    expect(classifyPromptIntent("viết hàm tính tổng hai số").asksAdvisor).toBe(false);
+    expect(classifyPromptIntent("format lại file json này").asksAdvisor).toBe(false);
+    expect(classifyPromptIntent("fix this bug: null pointer exception").asksAdvisor).toBe(false);
   });
 
   it("classifies architectural and review prompts as Tier 1 with code-review skill", () => {
