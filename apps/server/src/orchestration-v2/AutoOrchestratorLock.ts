@@ -1,6 +1,9 @@
 import { AUTO_ORCHESTRATOR_INSTANCE_ID, type ModelSelection, ThreadId } from "@t3tools/contracts";
+import { classifyPromptIntent } from "@t3tools/shared/autoOrchestrator/intentMatcher";
 import * as Effect from "effect/Effect";
 import { AutoOrchestratorService } from "./AutoOrchestratorService.ts";
+
+const ADVISOR_INSTRUCTION = "[Advisor] Call consult_advisor for this question before answering.";
 
 export interface ResolveDispatchInput {
   readonly commandModelSelection: ModelSelection | undefined;
@@ -13,7 +16,6 @@ export interface ResolveDispatchInput {
 export interface ResolveDispatchResult {
   readonly modelSelection: ModelSelection | undefined;
   readonly text: string;
-  readonly skillInstruction?: string | undefined;
   readonly reason: string;
 }
 
@@ -52,10 +54,12 @@ export const resolveDispatchSelection = Effect.fn("AutoOrchestrator.resolveDispa
       promptText: input.text,
       availableProviderInstanceIds: input.availableProviderInstanceIds,
     });
+    const asksAdvisor = classifyPromptIntent(input.text).overrideTag === "@claude";
     return {
       modelSelection: resolved.targetSelection,
-      text: resolved.cleanedPrompt,
-      skillInstruction: resolved.skillInstruction,
+      text: asksAdvisor
+        ? `${resolved.cleanedPrompt}\n\n${ADVISOR_INSTRUCTION}`
+        : resolved.cleanedPrompt,
       reason: resolved.reason,
     } satisfies ResolveDispatchResult;
   },

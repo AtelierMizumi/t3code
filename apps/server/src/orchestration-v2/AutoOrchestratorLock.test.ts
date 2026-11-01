@@ -63,7 +63,24 @@ describe("resolveDispatchSelection", () => {
     });
     expect(result.modelSelection?.instanceId).toBe("claudeAgent");
     expect(result.modelSelection).toEqual(claudeSelection);
-    expect(result.text).toBe("thiết kế spec cho module auth");
+    expect(result.text).toBe(
+      "thiết kế spec cho module auth\n\n[Advisor] Call consult_advisor for this question before answering.",
+    );
+  });
+
+  it("turns the @claude tag into an advisor instruction and keeps the tier model", async () => {
+    const result = await run({
+      commandModelSelection: autoSelection,
+      threadModelSelection: autoSelection,
+      hasRuns: false,
+      text: "@claude is this race condition safe?",
+      availableProviderInstanceIds: available,
+    });
+    expect(result.text).toBe(
+      "is this race condition safe?\n\n[Advisor] Call consult_advisor for this question before answering.",
+    );
+    expect(result.text).not.toContain("@claude");
+    expect(result.modelSelection).toEqual(claudeSelection);
   });
 
   it("uses the thread's selection when the command carries none", async () => {
