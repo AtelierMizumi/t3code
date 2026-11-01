@@ -116,7 +116,10 @@ const prepareMessageDispatch = Effect.fn("ThreadMessageIntake.prepareMessageDisp
       Effect.mapError(
         (cause) =>
           new AttachmentClaims.AttachmentClaimError({
-            message: "Failed to read the thread.",
+            message:
+              command.guestMessageId === undefined
+                ? "Failed to read the thread."
+                : "Failed to read the guest message.",
             cause,
           }),
       ),

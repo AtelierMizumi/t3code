@@ -469,3 +469,34 @@ it.effect("locks an auto_orchestrator selection to a concrete model before dispa
     expect(command.modelSelection?.model).toBe("gemini-3.8-flash-medium");
   }).pipe(Effect.provide(layerIntakeTest)),
 );
+
+it.effect("reports a failed guest message read as an attachment claim error", () =>
+  Effect.gen(function* () {
+    const layerFailingRead = Layer.mock(ThreadManagementService.ThreadManagementService)({
+      getThreadSnapshotWindow: () =>
+        Effect.fail(
+          new OrchestratorDispatchError({
+            commandId: CommandId.make("send-guest-unreadable"),
+            commandType: "message.dispatch",
+            cause: "read failed",
+          }),
+        ) as never,
+    });
+    const result = yield* dispatchCommand({
+      type: "message.dispatch",
+      commandId: CommandId.make("send-guest-unreadable"),
+      threadId: ThreadId.make("thread-guest-unreadable"),
+      messageId: MessageId.make("message-guest-unreadable"),
+      guestMessageId: GuestMessageId.make("guest-message:unreadable"),
+      text: "",
+      attachments: [],
+      dispatchMode: { type: "queue_after_active" },
+      createdBy: "user",
+      creationSource: "web",
+    }).pipe(Effect.provide(layerFailingRead), Effect.flip);
+    expect(result).toMatchObject({
+      _tag: "AttachmentClaimError",
+      message: "Failed to read the guest message.",
+    });
+  }).pipe(Effect.provide(layerIntakeTest)),
+);
