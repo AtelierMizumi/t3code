@@ -1,0 +1,80 @@
+import { describe, expect, it } from "vite-plus/test";
+import {
+  classifyPromptIntent,
+  stripRoutingTags,
+  type IntentClassificationResult,
+} from "./intentMatcher.ts";
+
+describe("classifyPromptIntent", () => {
+  it("prioritizes explicit @claude tag override", () => {
+    const result = classifyPromptIntent("@claude hãy viết regex kiểm tra email");
+    expect(result.tier).toBe(1);
+    expect(result.overrideTag).toBe("@claude");
+  });
+
+  it("prioritizes explicit @gemini tag override", () => {
+    const result = classifyPromptIntent("@gemini hãy review kiến trúc hệ thống");
+    expect(result.tier).toBe(2);
+    expect(result.overrideTag).toBe("@gemini");
+  });
+
+  it("prioritizes explicit @deepseek tag override", () => {
+    const result = classifyPromptIntent("@deepseek thiết kế spec cho tôi");
+    expect(result.tier).toBe(3);
+    expect(result.overrideTag).toBe("@deepseek");
+  });
+
+  it("classifies architectural and review prompts as Tier 1 with code-review skill", () => {
+    const r1 = classifyPromptIntent("Hãy thiết kế kiến trúc Clean Architecture cho module auth");
+    expect(r1.tier).toBe(1);
+    expect(r1.triggeredSkill).toBe("code-review");
+
+    const r2 = classifyPromptIntent("Review PR diff and audit security vulnerabilities");
+    expect(r2.tier).toBe(1);
+    expect(r2.triggeredSkill).toBe("code-review");
+  });
+
+  it("classifies fast utility and regex prompts as Tier 3", () => {
+    const r1 = classifyPromptIntent("Viết regex kiểm tra định dạng số điện thoại Việt Nam");
+    expect(r1.tier).toBe(3);
+
+    const r2 = classifyPromptIntent("Giải thích dòng code này giúp tôi");
+    expect(r2.tier).toBe(3);
+
+    const r3 = classifyPromptIntent("Format and generate conventional commit message");
+    expect(r3.tier).toBe(3);
+  });
+
+  it("classifies bug reports as Tier 2 with systematic-debugging skill", () => {
+    const result = classifyPromptIntent("Fix this bug: server crash with unhandled exception");
+    expect(result.tier).toBe(2);
+    expect(result.triggeredSkill).toBe("systematic-debugging");
+  });
+
+  it("classifies general coding and implementation prompts as Tier 2 with TDD skill", () => {
+    const result = classifyPromptIntent("Implement feature user profile editing with tests");
+    expect(result.tier).toBe(2);
+    expect(result.triggeredSkill).toBe("test-driven-development");
+  });
+
+  it("falls back to Tier 2 for general/unspecified queries", () => {
+    const result = classifyPromptIntent("Xin chào, hôm nay thế nào?");
+    expect(result.tier).toBe(2);
+  });
+});
+
+describe("stripRoutingTags", () => {
+  it("strips tag from beginning of prompt and trims whitespace", () => {
+    expect(stripRoutingTags("@claude Hãy viết spec")).toBe("Hãy viết spec");
+    expect(stripRoutingTags("@gemini    code tính năng này")).toBe("code tính năng này");
+    expect(stripRoutingTags("@deepseek regex email")).toBe("regex email");
+  });
+
+  it("strips tag inside prompt", () => {
+    expect(stripRoutingTags("Hãy dùng @claude để review")).toBe("Hãy dùng để review");
+  });
+
+  it("leaves prompt untouched if no tag exists", () => {
+    expect(stripRoutingTags("Không có tag nào")).toBe("Không có tag nào");
+  });
+});

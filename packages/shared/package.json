@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./autoOrchestrator/intentMatcher": {
+      "types": "./src/autoOrchestrator/intentMatcher.ts",
+      "import": "./src/autoOrchestrator/intentMatcher.ts"
+    },
     "./changedFileKind": {
       "types": "./src/changedFileKind.ts",
       "import": "./src/changedFileKind.ts"
