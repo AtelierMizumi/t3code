@@ -2,6 +2,8 @@ import { remapComposerContextAttachments } from "@t3tools/shared/composerContext
 import { appendUserInputAttachmentPaths } from "../provider/userInputAttachments.ts";
 import {
   AUTO_ORCHESTRATOR_INSTANCE_ID,
+  ProviderInstanceId,
+  resolveProjectProviderInstanceEnabled,
   type ChatAttachment,
   type OrchestrationV2Command,
   type OrchestrationV2ThreadProjection,
@@ -14,6 +16,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 
 import * as AttachmentClaims from "./AttachmentClaims.ts";
+import { DEFAULT_AUTO_ORCHESTRATOR_TIER_CONFIG } from "./AutoOrchestratorService.ts";
 import * as AutoOrchestratorService from "./AutoOrchestratorService.ts";
 import { resolveDispatchSelection } from "./AutoOrchestratorLock.ts";
 import * as ThreadLaunch from "./ThreadLaunchService.ts";
@@ -85,14 +88,27 @@ const withGuestAttachments = (
 const withLockedModelSelection = Effect.fn("ThreadMessageIntake.withLockedModelSelection")(
   function* (command: MessageDispatchCommand, projection: OrchestrationV2ThreadProjection) {
     const settings = yield* ServerSettings.ServerSettingsService;
-    const { providerInstances } = yield* settings.getSettings;
+    const serverSettings = yield* settings.getSettings;
+    const projectId = projection.thread.projectId;
     const resolved = yield* resolveDispatchSelection({
       commandModelSelection: command.modelSelection,
       threadModelSelection: projection.thread.modelSelection,
       hasRuns: projection.runs.length > 0,
       text: command.text,
-      availableProviderInstanceIds: Object.entries(providerInstances).flatMap(([id, instance]) =>
-        instance.enabled === false ? [] : [id],
+      // Unlisted instances are enabled by default, so tier targets count even when absent from settings.
+      availableProviderInstanceIds: [
+        ...new Set([
+          ...Object.keys(serverSettings.providerInstances),
+          ...Object.values(DEFAULT_AUTO_ORCHESTRATOR_TIER_CONFIG).flatMap((tier) =>
+            typeof tier === "object" ? [tier.instanceId] : [],
+          ),
+        ]),
+      ].filter((id) =>
+        resolveProjectProviderInstanceEnabled(
+          serverSettings,
+          projectId,
+          ProviderInstanceId.make(id),
+        ),
       ),
     });
     return {
