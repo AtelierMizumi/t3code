@@ -109,33 +109,24 @@ describe("AutoOrchestratorService", () => {
       expect(result.activeTier).toBe(3);
     }).pipe(Effect.provide(AutoOrchestratorServiceLive), Effect.runPromise));
 
-  it("keeps Tier 3 when stickiness continues a Flash-Low session", () =>
+  it("resolves the same selection regardless of any previous selection", () =>
     Effect.gen(function* () {
       const service = yield* AutoOrchestratorService;
-      const result = yield* service.resolveTurnSelection({
-        threadId: ThreadId.make("thread_test_flash_low"),
-        promptText: "Chạy thử xem sao, kết quả thế nào?",
-        previousActiveSelection: flashLowSelection,
-        availableProviderInstanceIds: defaultAvailable,
-      });
-
-      expect(result.targetSelection).toEqual(flashLowSelection);
-      expect(result.activeTier).toBe(3);
-    }).pipe(Effect.provide(AutoOrchestratorServiceLive), Effect.runPromise));
-
-  it("honors Smart Stickiness for general follow-up turns", () =>
-    Effect.gen(function* () {
-      const service = yield* AutoOrchestratorService;
-      const result = yield* service.resolveTurnSelection({
+      const input = {
         threadId: ThreadId.make("thread_test_5"),
         promptText: "Chạy thử xem sao, kết quả thế nào?",
-        previousActiveSelection: claudeSelection,
         availableProviderInstanceIds: defaultAvailable,
+      };
+      const first = yield* service.resolveTurnSelection(input);
+      const second = yield* service.resolveTurnSelection({
+        ...input,
+        // @ts-expect-error previousActiveSelection was removed: selection is a pure function of the prompt
+        previousActiveSelection: claudeSelection,
       });
 
-      expect(result.targetSelection.instanceId).toBe("claudeAgent");
-      expect(result.activeTier).toBe(1);
-      expect(result.reason).toContain("Smart Stickiness");
+      expect(second.targetSelection).toEqual(first.targetSelection);
+      expect(second.activeTier).toBe(first.activeTier);
+      expect(second.reason).not.toContain("Stickiness");
     }).pipe(Effect.provide(AutoOrchestratorServiceLive), Effect.runPromise));
 
   it("falls back to Tier 2 when the desired provider is unavailable", () =>

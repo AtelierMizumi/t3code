@@ -5,7 +5,6 @@ import {
   stripRoutingTags,
 } from "@t3tools/shared/autoOrchestrator/intentMatcher";
 import {
-  AUTO_ORCHESTRATOR_INSTANCE_ID,
   type AutoOrchestratorTierConfig,
   type ModelSelection,
   ProviderInstanceId,
@@ -39,7 +38,6 @@ export const DEFAULT_AUTO_ORCHESTRATOR_TIER_CONFIG: AutoOrchestratorTierConfig =
 export interface ResolveTurnSelectionInput {
   readonly threadId: ThreadId;
   readonly promptText: string;
-  readonly previousActiveSelection?: ModelSelection | undefined;
   readonly tierConfig?: Partial<AutoOrchestratorTierConfig> | undefined;
   readonly availableProviderInstanceIds: ReadonlyArray<string>;
 }
@@ -63,10 +61,6 @@ export class AutoOrchestratorService extends Context.Service<
   AutoOrchestratorService,
   AutoOrchestratorServiceShape
 >()("t3/orchestration-v2/AutoOrchestratorService") {}
-
-function isSameSelection(left: ModelSelection, right: ModelSelection): boolean {
-  return left.instanceId === right.instanceId && left.model === right.model;
-}
 
 // Antigravity encodes Gemini effort in the model slug; other providers keep their configured model.
 function withGeminiEffort(
@@ -110,31 +104,6 @@ export const layer: Layer.Layer<AutoOrchestratorService> = Layer.succeed(AutoOrc
         classification.effort,
       );
       let reason = classification.reason;
-
-      // Smart Stickiness: If no explicit tag override, and previous selection is active,
-      // and current prompt is a follow-up or default coding intent, stick to previous selection
-      if (
-        config.enableSmartStickiness !== false &&
-        !classification.overrideTag &&
-        input.previousActiveSelection &&
-        input.previousActiveSelection.instanceId !== AUTO_ORCHESTRATOR_INSTANCE_ID
-      ) {
-        const isStrongIntentShift =
-          classification.tier === 1 && classification.triggeredSkill !== undefined;
-
-        if (!isStrongIntentShift && availableSet.has(input.previousActiveSelection.instanceId)) {
-          chosenSelection = input.previousActiveSelection;
-          reason = `Smart Stickiness: Continuing session with ${input.previousActiveSelection.instanceId}`;
-          // Tier 1 and 3 can share a provider (Claude), so compare the model too.
-          if (isSameSelection(input.previousActiveSelection, config.tier1)) {
-            chosenTier = 1;
-          } else if (isSameSelection(input.previousActiveSelection, config.tier3)) {
-            chosenTier = 3;
-          } else {
-            chosenTier = 2;
-          }
-        }
-      }
 
       // Fallback safety check: Is the chosen provider instance available?
       if (!availableSet.has(chosenSelection.instanceId)) {
