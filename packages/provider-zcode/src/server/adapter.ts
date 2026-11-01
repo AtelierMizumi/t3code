@@ -1,4 +1,5 @@
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import {
   ProviderDriverKind,
   type ChatAttachment,
@@ -1024,6 +1025,10 @@ export const makeZcodeAdapterV2 = Effect.fn("makeZcodeAdapterV2")(function* (
         const sessionCwd = runtimePolicy?.cwd ?? cwd;
         const requestedModel =
           modelSelection === undefined ? undefined : resolveZcodeModelSlug(modelSelection.model);
+        const selectedEffort =
+          modelSelection === undefined
+            ? "max"
+            : (getModelSelectionStringOptionValue(modelSelection, "effort") ?? "max");
         const mode = mapRuntimeModeToZcodeMode(
           runtimePolicy?.runtimeMode,
           runtimePolicy?.interactionMode,
@@ -1038,6 +1043,12 @@ export const makeZcodeAdapterV2 = Effect.fn("makeZcodeAdapterV2")(function* (
                 ...(selectionProviderId ? { providerId: selectionProviderId } : {}),
               })
         ).pipe(Effect.mapError(fail));
+        yield* connection
+          .request("session/setThoughtLevel", {
+            sessionId: created.sessionId,
+            thoughtLevel: selectedEffort,
+          })
+          .pipe(Effect.ignore);
         const createdAt = yield* DateTime.now;
         const nativeThreadId = created.sessionId;
         const providerThread: OrchestrationV2ProviderThread =
@@ -1092,30 +1103,42 @@ export const makeZcodeAdapterV2 = Effect.fn("makeZcodeAdapterV2")(function* (
         modelSelection: ModelSelection,
       ) {
         const requested = resolveZcodeModelSlug(modelSelection.model);
+        const selectedEffort =
+          getModelSelectionStringOptionValue(modelSelection, "effort") ?? "max";
+
         if (requested === undefined) {
           // "default" sentinel: keep the desktop plan's own model selection.
           if (state.appliedModelId !== null && state.baselineModelId !== null) {
             yield* connection.request("session/setModel", {
               sessionId: state.zcodeSessionId,
-              model: { modelId: state.baselineModelId },
+              model: {
+                modelId: state.baselineModelId,
+                options: { reasoningLevel: selectedEffort },
+              },
             });
+            yield* connection
+              .request("session/setThoughtLevel", {
+                sessionId: state.zcodeSessionId,
+                thoughtLevel: selectedEffort,
+              })
+              .pipe(Effect.ignore);
             state.appliedModelId = null;
           }
           return;
         }
-        if (requested === state.appliedModelId) return;
+
         yield* connection.request("session/setModel", {
           sessionId: state.zcodeSessionId,
           model: {
             modelId: requested,
             ...(selectionProviderId ? { providerId: selectionProviderId } : {}),
-            options: { reasoningLevel: "max" },
+            options: { reasoningLevel: selectedEffort },
           },
         });
         yield* connection
           .request("session/setThoughtLevel", {
             sessionId: state.zcodeSessionId,
-            thoughtLevel: "max",
+            thoughtLevel: selectedEffort,
           })
           .pipe(Effect.ignore);
         state.appliedModelId = requested;

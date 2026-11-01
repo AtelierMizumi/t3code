@@ -1,10 +1,12 @@
 import {
   type CustomModelSetting,
   type ModelCapabilities,
+  type ProviderOptionDescriptor,
   type ServerProviderAuth,
   type ServerProviderModel,
 } from "@t3tools/contracts";
 import type { ZcodeSettings } from "../settings.ts";
+import { createModelCapabilities } from "@t3tools/shared/model";
 import { compareSemverVersions } from "@t3tools/shared/semver";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as DateTime from "effect/DateTime";
@@ -35,7 +37,7 @@ export const ZCODE_PRESENTATION = {
   supportsConversationRollback: false,
 } as const;
 
-const VERSION_PROBE_TIMEOUT_MS = 15_000;
+const VERSION_PROBE_TIMEOUT_MS = 25_000;
 
 /**
  * ZCode Protocol evolves with the desktop app and is not a published API, so
@@ -43,32 +45,45 @@ const VERSION_PROBE_TIMEOUT_MS = 15_000;
  */
 export const MINIMUM_ZCODE_VERSION: string | null = null;
 
-const EMPTY_MODEL_CAPABILITIES: ModelCapabilities = {};
+export const ZCODE_EFFORT_OPTION_DESCRIPTOR: ProviderOptionDescriptor = {
+  id: "effort",
+  label: "Effort",
+  type: "select",
+  options: [
+    { id: "low", label: "Low" },
+    { id: "high", label: "High" },
+    { id: "max", label: "Max", isDefault: true },
+  ],
+};
+
+export const ZCODE_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabilities({
+  optionDescriptors: [ZCODE_EFFORT_OPTION_DESCRIPTOR],
+});
 
 const ZCODE_BUILTIN_MODELS: ReadonlyArray<ServerProviderModel> = [
   {
     slug: "GLM-5.3",
     name: "GLM-5.3",
     isCustom: false,
-    capabilities: EMPTY_MODEL_CAPABILITIES,
+    capabilities: ZCODE_MODEL_CAPABILITIES,
   },
   {
     slug: "GLM-5.3-Flash",
     name: "GLM-5.3 Flash",
     isCustom: false,
-    capabilities: EMPTY_MODEL_CAPABILITIES,
+    capabilities: ZCODE_MODEL_CAPABILITIES,
   },
   {
     slug: "GLM-5.2",
     name: "GLM-5.2",
     isCustom: false,
-    capabilities: EMPTY_MODEL_CAPABILITIES,
+    capabilities: ZCODE_MODEL_CAPABILITIES,
   },
   {
     slug: "GLM-5-Turbo",
     name: "GLM-5-Turbo",
     isCustom: false,
-    capabilities: EMPTY_MODEL_CAPABILITIES,
+    capabilities: ZCODE_MODEL_CAPABILITIES,
   },
 ];
 
@@ -95,10 +110,14 @@ function buildZcodeVersionArgv(
     return {
       command: appServer.command,
       args: [bundlePath, "--version"],
-      ...(appServer.envExtras ?? {}),
+      ...(appServer.envExtras ? { envExtras: appServer.envExtras } : {}),
     };
   }
-  return { command: appServer.command, args: ["--version"] };
+  return {
+    command: appServer.command,
+    args: ["--version"],
+    ...(appServer.envExtras ? { envExtras: appServer.envExtras } : {}),
+  };
 }
 
 const runZcodeVersionProbe = Effect.fn("ZcodeProviderStatus.runZcodeVersionProbe")(function* (
