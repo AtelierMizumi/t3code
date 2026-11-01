@@ -5,11 +5,13 @@ import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
+  AUTO_ORCHESTRATOR_INSTANCE_ID,
   ChatAttachmentId,
   CommandId,
   EventId,
   GuestMessageId,
   MessageId,
+  ProviderInstanceId,
   RuntimeRequestId,
   ThreadId,
   TurnItemId,
@@ -424,5 +426,46 @@ it.effect("sends a guest message with the guest's files, never ones the client n
     expect(command.attachments).toHaveLength(1);
     // The guest's file, which is already the thread's.
     expect(command.attachments).toEqual([guestFile]);
+  }).pipe(Effect.provide(layerIntakeTest)),
+);
+
+it.effect("locks an auto_orchestrator selection to a concrete model before dispatch", () =>
+  Effect.gen(function* () {
+    const captured: OrchestrationV2ServerCommand[] = [];
+    const layerFreshThread = Layer.mock(ThreadManagementService.ThreadManagementService)({
+      dispatch: layerFailingDispatchHandler(captured),
+      getThreadSnapshotWindow: () =>
+        Effect.succeed({
+          projection: {
+            thread: {
+              modelSelection: { instanceId: AUTO_ORCHESTRATOR_INSTANCE_ID, model: "auto" },
+            },
+            runs: [],
+          },
+        } as unknown as Effect.Success<
+          ReturnType<
+            ThreadManagementService.ThreadManagementServiceShape["getThreadSnapshotWindow"]
+          >
+        >),
+    });
+    yield* dispatchCommand({
+      type: "message.dispatch",
+      commandId: CommandId.make("send-auto-message"),
+      threadId: ThreadId.make("thread-auto"),
+      messageId: MessageId.make("message-auto"),
+      text: "hello",
+      attachments: [],
+      modelSelection: {
+        instanceId: ProviderInstanceId.make(AUTO_ORCHESTRATOR_INSTANCE_ID),
+        model: "auto",
+      },
+      dispatchMode: { type: "queue_after_active" },
+      createdBy: "user",
+      creationSource: "web",
+    }).pipe(Effect.provide(layerFreshThread), Effect.result);
+    const command = captured[0];
+    if (command?.type !== "message.dispatch") throw new Error("Expected a message dispatch.");
+    expect(command.modelSelection?.instanceId).toBe("antigravity");
+    expect(command.modelSelection?.model).toBe("gemini-3.8-flash-medium");
   }).pipe(Effect.provide(layerIntakeTest)),
 );
