@@ -134,6 +134,7 @@ it.effect("answers with the advisor's result when the wait ends on a completed t
       target: {
         providerInstanceId: ProviderInstanceId.make("claudeAgent"),
         model: "claude-sonnet-5-5",
+        options: [{ id: "effort", value: "medium" }],
       },
     });
     expect(delegated[0]?.task).toContain("Is this race condition safe?");

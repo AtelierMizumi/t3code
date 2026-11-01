@@ -23,6 +23,7 @@ import * as ProjectionStore from "./ProjectionStore.ts";
 const ADVISOR_TARGET = {
   providerInstanceId: ProviderInstanceId.make("claudeAgent"),
   model: "claude-sonnet-5-5",
+  options: [{ id: "effort", value: "medium" }],
 } as const;
 
 export interface ConsultAdvisorInput {
