@@ -7,7 +7,8 @@ export const zcodeClient = defineProviderClient({
   driverKind: ProviderDriverKind.make("zcode"),
   label: "ZCode",
   settingsSchema: ZcodeSettings,
-  featured: false,
+  featured: true,
+  modelFamilies: ["GLM-", "GLM "],
   icon: {
     viewBox: "0 0 24 24",
     fill: { light: "#1A7AFF", dark: "#6BA6FF" },

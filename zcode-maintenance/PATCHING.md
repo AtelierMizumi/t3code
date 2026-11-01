@@ -50,7 +50,7 @@ If upstream renames one of these anchors, the fix is: find the new anchor
 ## Update runbook
 
 ```sh
-cd ~/src/t3code
+cd ~/Projects/Tools/t3code
 zcode-maintenance/sync-upstream.sh            # merge + typecheck + test + build + package
 git push origin zcode-main                     # publish the sync commit
 # then install the printed pacman command (sudo required once)
