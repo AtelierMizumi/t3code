@@ -16,12 +16,12 @@ describe("AutoOrchestratorService", () => {
     instanceId: ProviderInstanceId.make("antigravity"),
     model: "gemini-3.8-flash-high",
   };
-  const deepseekSelection: ModelSelection = {
-    instanceId: ProviderInstanceId.make("opencode"),
-    model: "orcarouter/deepseek/deepseek-v4-flash-free",
+  const flashLowSelection: ModelSelection = {
+    instanceId: ProviderInstanceId.make("antigravity"),
+    model: "gemini-3.8-flash-low",
   };
 
-  const defaultAvailable = ["claudeAgent", "antigravity", "opencode", "zcode"];
+  const defaultAvailable = ["claudeAgent", "antigravity"];
 
   it("routes explicit @claude tag override to Tier 1 and cleans prompt", () =>
     Effect.gen(function* () {
@@ -37,7 +37,7 @@ describe("AutoOrchestratorService", () => {
       expect(result.cleanedPrompt).toBe("thiết kế spec cho module auth");
     }).pipe(Effect.provide(AutoOrchestratorServiceLive), Effect.runPromise));
 
-  it("routes explicit @zcode tag override to zcode provider and cleans prompt", () =>
+  it("does not route on @zcode and keeps the prompt intact", () =>
     Effect.gen(function* () {
       const service = yield* AutoOrchestratorService;
       const result = yield* service.resolveTurnSelection({
@@ -46,9 +46,8 @@ describe("AutoOrchestratorService", () => {
         availableProviderInstanceIds: defaultAvailable,
       });
 
-      expect(result.targetSelection.instanceId).toBe("zcode");
-      expect(result.targetSelection.model).toBe("GLM-5.3");
-      expect(result.cleanedPrompt).toBe("giải quyết thuật toán này");
+      expect(result.targetSelection.instanceId).not.toBe("zcode");
+      expect(result.cleanedPrompt).toBe("@zcode giải quyết thuật toán này");
     }).pipe(Effect.provide(AutoOrchestratorServiceLive), Effect.runPromise));
 
   it("routes architectural intent to Tier 1 with auto-skill instruction", () =>
@@ -79,6 +78,22 @@ describe("AutoOrchestratorService", () => {
       expect(result.activeTier).toBe(2);
       expect(result.triggeredSkill).toBe("test-driven-development");
       expect(result.skillInstruction).toContain("test-driven-development");
+      expect(result.targetSelection.model).toBe("gemini-3.8-flash-high");
+    }).pipe(Effect.provide(AutoOrchestratorServiceLive), Effect.runPromise));
+
+  it("uses medium Gemini effort for default coding prompts", () =>
+    Effect.gen(function* () {
+      const service = yield* AutoOrchestratorService;
+      const result = yield* service.resolveTurnSelection({
+        threadId: ThreadId.make("thread_test_default_effort"),
+        promptText: "Xin chào, hôm nay thế nào?",
+        availableProviderInstanceIds: defaultAvailable,
+      });
+
+      expect(result.targetSelection).toEqual({
+        instanceId: ProviderInstanceId.make("antigravity"),
+        model: "gemini-3.8-flash-medium",
+      });
     }).pipe(Effect.provide(AutoOrchestratorServiceLive), Effect.runPromise));
 
   it("routes regex & utility intent to Tier 3", () =>
@@ -90,7 +105,21 @@ describe("AutoOrchestratorService", () => {
         availableProviderInstanceIds: defaultAvailable,
       });
 
-      expect(result.targetSelection.instanceId).toBe("opencode");
+      expect(result.targetSelection).toEqual(flashLowSelection);
+      expect(result.activeTier).toBe(3);
+    }).pipe(Effect.provide(AutoOrchestratorServiceLive), Effect.runPromise));
+
+  it("keeps Tier 3 when stickiness continues a Flash-Low session", () =>
+    Effect.gen(function* () {
+      const service = yield* AutoOrchestratorService;
+      const result = yield* service.resolveTurnSelection({
+        threadId: ThreadId.make("thread_test_flash_low"),
+        promptText: "Chạy thử xem sao, kết quả thế nào?",
+        previousActiveSelection: flashLowSelection,
+        availableProviderInstanceIds: defaultAvailable,
+      });
+
+      expect(result.targetSelection).toEqual(flashLowSelection);
       expect(result.activeTier).toBe(3);
     }).pipe(Effect.provide(AutoOrchestratorServiceLive), Effect.runPromise));
 

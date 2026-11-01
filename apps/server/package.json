@@ -49,7 +49,6 @@
     "@t3tools/provider-muse": "workspace:*",
     "@t3tools/provider-opencode": "workspace:*",
     "@t3tools/provider-pi": "workspace:*",
-    "@t3tools/provider-zcode": "workspace:*",
     "@t3tools/source-control-azure-devops": "workspace:*",
     "@t3tools/source-control-bitbucket": "workspace:*",
     "@t3tools/source-control-core": "workspace:*",

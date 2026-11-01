@@ -18,10 +18,9 @@ describe("classifyPromptIntent", () => {
     expect(result.overrideTag).toBe("@gemini");
   });
 
-  it("prioritizes explicit @deepseek tag override", () => {
-    const result = classifyPromptIntent("@deepseek thiết kế spec cho tôi");
-    expect(result.tier).toBe(3);
-    expect(result.overrideTag).toBe("@deepseek");
+  it("does not treat @deepseek or @zcode as routing tags", () => {
+    expect(classifyPromptIntent("@deepseek viết regex email").overrideTag).toBeUndefined();
+    expect(classifyPromptIntent("@zcode giải quyết thuật toán").overrideTag).toBeUndefined();
   });
 
   it("classifies architectural and review prompts as Tier 1 with code-review skill", () => {
@@ -63,11 +62,26 @@ describe("classifyPromptIntent", () => {
   });
 });
 
+describe("classifyPromptIntent effort", () => {
+  it("maps debugging and TDD prompts to high effort", () => {
+    expect(classifyPromptIntent("Fix this bug: server crash").effort).toBe("high");
+    expect(classifyPromptIntent("Implement feature with tests").effort).toBe("high");
+  });
+
+  it("maps default coding prompts to medium effort", () => {
+    expect(classifyPromptIntent("Xin chào, hôm nay thế nào?").effort).toBe("medium");
+  });
+
+  it("maps fast utility prompts to low effort", () => {
+    expect(classifyPromptIntent("Viết regex kiểm tra email").effort).toBe("low");
+  });
+});
+
 describe("stripRoutingTags", () => {
   it("strips tag from beginning of prompt and trims whitespace", () => {
     expect(stripRoutingTags("@claude Hãy viết spec")).toBe("Hãy viết spec");
     expect(stripRoutingTags("@gemini    code tính năng này")).toBe("code tính năng này");
-    expect(stripRoutingTags("@deepseek regex email")).toBe("regex email");
+    expect(stripRoutingTags("@deepseek regex email")).toBe("@deepseek regex email");
   });
 
   it("strips tag inside prompt", () => {

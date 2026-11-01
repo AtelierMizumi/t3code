@@ -1,13 +1,17 @@
 export type AutoOrchestratorTier = 1 | 2 | 3;
 
+/** Gemini effort suffix used in Antigravity model slugs (`gemini-3.8-flash-<effort>`). */
+export type GeminiEffort = "low" | "medium" | "high";
+
 export interface IntentClassificationResult {
   readonly tier: AutoOrchestratorTier;
   readonly triggeredSkill?: string;
   readonly reason: string;
   readonly overrideTag?: string;
+  readonly effort?: GeminiEffort;
 }
 
-const TAG_REGEX = /@(claude|gemini|deepseek|zcode)\b/gi;
+const TAG_REGEX = /@(claude|gemini)\b/gi;
 
 export function stripRoutingTags(prompt: string): string {
   return prompt
@@ -22,13 +26,12 @@ export function classifyPromptIntent(prompt: string): IntentClassificationResult
     return { tier: 1, reason: "Explicit @claude override", overrideTag: "@claude" };
   }
   if (/@gemini\b/i.test(prompt)) {
-    return { tier: 2, reason: "Explicit @gemini override", overrideTag: "@gemini" };
-  }
-  if (/@deepseek\b/i.test(prompt)) {
-    return { tier: 3, reason: "Explicit @deepseek override", overrideTag: "@deepseek" };
-  }
-  if (/@zcode\b/i.test(prompt)) {
-    return { tier: 2, reason: "Explicit @zcode override", overrideTag: "@zcode" };
+    return {
+      tier: 2,
+      reason: "Explicit @gemini override",
+      overrideTag: "@gemini",
+      effort: "medium",
+    };
   }
 
   // 2. Tier 1: Architecture, Spec, Review, Security, Vulnerability, Grilling
@@ -52,6 +55,7 @@ export function classifyPromptIntent(prompt: string): IntentClassificationResult
     return {
       tier: 3,
       reason: "Fast Utility Intent",
+      effort: "low",
     };
   }
 
@@ -61,6 +65,7 @@ export function classifyPromptIntent(prompt: string): IntentClassificationResult
       tier: 2,
       triggeredSkill: "systematic-debugging",
       reason: "Debugging Intent",
+      effort: "high",
     };
   }
 
@@ -70,6 +75,7 @@ export function classifyPromptIntent(prompt: string): IntentClassificationResult
       tier: 2,
       triggeredSkill: "test-driven-development",
       reason: "Coding & TDD Intent",
+      effort: "high",
     };
   }
 
@@ -77,5 +83,6 @@ export function classifyPromptIntent(prompt: string): IntentClassificationResult
   return {
     tier: 2,
     reason: "Default Coding Workhorse",
+    effort: "medium",
   };
 }

@@ -283,13 +283,7 @@ function scheduledTaskSummary(task: ScheduledTask, mayRun: boolean): Orchestrato
  * get a short list by default and search for the rest. These providers have
  * small official catalogs, so all their current models are listed.
  */
-const FULL_CATALOG_DRIVERS: ReadonlySet<string> = new Set([
-  "codex",
-  "claudeAgent",
-  "muse",
-  "grok",
-  "zcode",
-]);
+const FULL_CATALOG_DRIVERS: ReadonlySet<string> = new Set(["codex", "claudeAgent", "muse", "grok"]);
 const LISTED_MODEL_LIMIT = 8;
 
 /**
