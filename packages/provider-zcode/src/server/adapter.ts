@@ -1109,8 +1109,15 @@ export const makeZcodeAdapterV2 = Effect.fn("makeZcodeAdapterV2")(function* (
           model: {
             modelId: requested,
             ...(selectionProviderId ? { providerId: selectionProviderId } : {}),
+            options: { reasoningLevel: "max" },
           },
         });
+        yield* connection
+          .request("session/setThoughtLevel", {
+            sessionId: state.zcodeSessionId,
+            thoughtLevel: "max",
+          })
+          .pipe(Effect.ignore);
         state.appliedModelId = requested;
       });
 

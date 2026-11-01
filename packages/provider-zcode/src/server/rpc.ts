@@ -514,6 +514,7 @@ export const zcodeCreateSession = Effect.fn("ZcodeRpc.zcodeCreateSession")(funct
     params.model = {
       modelId: input.modelId,
       ...(input.providerId ? { providerId: input.providerId } : {}),
+      options: { reasoningLevel: "max" },
     };
   }
   const raw = yield* connection.request("session/create", params);
@@ -530,6 +531,12 @@ export const zcodeCreateSession = Effect.fn("ZcodeRpc.zcodeCreateSession")(funct
     includeSnapshot: true,
     afterSeq: 0,
   });
+  yield* connection
+    .request("session/setThoughtLevel", {
+      sessionId: created.sessionId,
+      thoughtLevel: "max",
+    })
+    .pipe(Effect.ignore);
   return created;
 });
 
