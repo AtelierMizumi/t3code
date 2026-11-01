@@ -92,4 +92,36 @@ describe("resolveZcodeCliPath", () => {
       expect(findZcodeOnPath("zcode", { PATH: `${first}:${second}` }, platform)).toBe(executable);
     }),
   );
+
+  it("prefers a wrapper script on PATH when resolving default zcode", () => {
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "zcode-wrapper-"));
+    const wrapper = NodePath.join(dir, "zcode");
+    NodeFS.writeFileSync(wrapper, '#!/bin/sh\nexec node zcode.cjs "$@"\n', { mode: 0o755 });
+    expect(resolveZcodeCliPath("zcode", { PATH: dir }, "linux")).toBe(wrapper);
+  });
+
+  it("attaches sibling zcode-builtin.json to envExtras when found", () => {
+    const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "zcode-bundle-"));
+    const glmDir = NodePath.join(root, "glm");
+    const configDir = NodePath.join(root, "config", "provider");
+    NodeFS.mkdirSync(glmDir, { recursive: true });
+    NodeFS.mkdirSync(configDir, { recursive: true });
+    const cjs = NodePath.join(glmDir, "zcode.cjs");
+    const builtinJson = NodePath.join(configDir, "zcode-builtin.json");
+    NodeFS.writeFileSync(cjs, "console.log('ok')\n");
+    NodeFS.writeFileSync(builtinJson, "{}\n");
+
+    const argv = buildZcodeAppServerArgv({
+      binaryPath: cjs,
+      env: { ZCODE_NODE: "/bin/node" },
+      platform: "linux",
+    });
+    expect(argv.envExtras?.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE).toBe(builtinJson);
+  });
+
+  it("expands tilde paths when binaryPath starts with ~/", () => {
+    const home = NodeOS.homedir();
+    const resolved = resolveZcodeCliPath("~/.local/bin/zcode", {}, "linux");
+    expect(resolved).toBe(NodePath.join(home, ".local", "bin", "zcode"));
+  });
 });

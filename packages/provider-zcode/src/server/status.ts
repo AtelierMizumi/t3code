@@ -35,7 +35,7 @@ export const ZCODE_PRESENTATION = {
   supportsConversationRollback: false,
 } as const;
 
-const VERSION_PROBE_TIMEOUT_MS = 4_000;
+const VERSION_PROBE_TIMEOUT_MS = 15_000;
 
 /**
  * ZCode Protocol evolves with the desktop app and is not a published API, so

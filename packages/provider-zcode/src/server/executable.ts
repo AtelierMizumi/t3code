@@ -53,6 +53,20 @@ function siblingCjsFromLauncher(launcherPath: string): string | undefined {
   return undefined;
 }
 
+function findSiblingBuiltinConfig(cliPath: string): string | undefined {
+  const dir = NodePath.dirname(cliPath);
+  const candidates = [
+    NodePath.resolve(dir, "..", "config", "provider", "zcode-builtin.json"),
+    NodePath.resolve(dir, "provider", "zcode-builtin.json"),
+    NodePath.resolve(dir, "..", "..", "config", "provider", "zcode-builtin.json"),
+  ];
+  for (const candidate of candidates) {
+    const found = existingFile(candidate);
+    if (found) return found;
+  }
+  return undefined;
+}
+
 function wellKnownCjsPaths(env: NodeJS.ProcessEnv): ReadonlyArray<string> {
   const home = NodeOS.homedir();
   const localAppData = env.LOCALAPPDATA?.trim();
@@ -110,7 +124,11 @@ export function resolveZcodeCliPath(
   env: NodeJS.ProcessEnv,
   platform: NodeJS.Platform,
 ): string {
-  const requested = binaryPath?.trim() || "zcode";
+  const rawRequested = binaryPath?.trim() || "zcode";
+  const requested =
+    rawRequested.startsWith("~/") || rawRequested === "~"
+      ? NodePath.join(NodeOS.homedir(), rawRequested.slice(1))
+      : rawRequested;
   const requestedFile = existingFile(requested);
   if (requestedFile) {
     if (
@@ -132,17 +150,17 @@ export function resolveZcodeCliPath(
     return requested;
   }
 
-  for (const candidate of wellKnownCjsPaths(env)) {
-    const found = existingFile(candidate);
-    if (found) return found;
-  }
-
   const fromPath = findZcodeOnPath(requested === "zcode" ? "zcode" : requested, env, platform);
   if (fromPath) {
     if (looksLikeElectronLauncher(fromPath)) {
       return siblingCjsFromLauncher(fromPath) ?? fromPath;
     }
     return fromPath;
+  }
+
+  for (const candidate of wellKnownCjsPaths(env)) {
+    const found = existingFile(candidate);
+    if (found) return found;
   }
 
   return requested;
@@ -170,28 +188,30 @@ export function buildZcodeAppServerArgv(input: {
   readonly envExtras?: Readonly<Record<string, string>>;
 } {
   const cliPath = resolveZcodeCliPath(input.binaryPath, input.env, input.platform);
+  const extraEnv: Record<string, string> = {};
+
   if (isZcodeNodeBundle(cliPath)) {
+    const builtinConfig =
+      input.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE?.trim() || findSiblingBuiltinConfig(cliPath);
+    if (builtinConfig) {
+      extraEnv.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE = builtinConfig;
+    }
+
     const command = resolveZcodeNodeBinary(input.env);
-    // Spawning through our own runtime binary may mean spawning an Electron
-    // binary: the packaged desktop sidecar runs as
-    // `ELECTRON_RUN_AS_NODE=1 t3code ... bin.mjs`, so process.versions.electron
-    // is undefined there and cannot be used for detection. Plain node ignores
-    // the flag, Electron honors it and runs the bundle as node.
     const spawningOwnBinary = command === process.execPath;
     const inheritsElectronFlag =
       input.env.ELECTRON_RUN_AS_NODE === "1" || process.env.ELECTRON_RUN_AS_NODE === "1";
     if (spawningOwnBinary || inheritsElectronFlag) {
-      return {
-        command,
-        args: [cliPath, "app-server", "--surface", "desktop"],
-        envExtras: { ELECTRON_RUN_AS_NODE: "1" },
-      };
+      extraEnv.ELECTRON_RUN_AS_NODE = "1";
     }
+
     return {
       command,
       args: [cliPath, "app-server", "--surface", "desktop"],
+      ...(Object.keys(extraEnv).length > 0 ? { envExtras: extraEnv } : {}),
     };
   }
+
   return {
     command: cliPath,
     args: ["app-server", "--surface", "desktop"],
