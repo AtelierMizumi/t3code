@@ -510,10 +510,10 @@ export const zcodeCreateSession = Effect.fn("ZcodeRpc.zcodeCreateSession")(funct
     workspace: { workspacePath: input.cwd, workspaceKey: input.cwd },
     mode: input.mode,
   };
-  if (input.modelId) {
+  if (input.modelId && input.providerId) {
     params.model = {
       modelId: input.modelId,
-      ...(input.providerId ? { providerId: input.providerId } : {}),
+      providerId: input.providerId,
       options: { reasoningLevel: "max" },
     };
   }

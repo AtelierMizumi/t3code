@@ -1127,11 +1127,17 @@ export const makeZcodeAdapterV2 = Effect.fn("makeZcodeAdapterV2")(function* (
           return;
         }
 
+        if (selectionProviderId === undefined) {
+          return yield* protocolError(
+            "ZCode requires a Coding Plan API Key to select models. Please go to Settings -> Providers -> ZCode and paste your API key from https://z.ai/manage-apikey/apikey-list.",
+          );
+        }
+
         yield* connection.request("session/setModel", {
           sessionId: state.zcodeSessionId,
           model: {
             modelId: requested,
-            ...(selectionProviderId ? { providerId: selectionProviderId } : {}),
+            providerId: selectionProviderId,
             options: { reasoningLevel: selectedEffort },
           },
         });
