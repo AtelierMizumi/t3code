@@ -42,7 +42,9 @@ import { McpSchema, Tool, Toolkit } from "effect/ai";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
 
+import * as ProjectionStore from "../../../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
 import * as PeerForwarding from "../../../peer/PeerForwarding.ts";
 import * as PeerLinkRequests from "../../../peer/PeerLinkRequests.ts";
 import * as PeerLinks from "../../../peer/PeerLinks.ts";
@@ -54,6 +56,11 @@ const dependencies = [
   McpInvocationContext.McpInvocationContext,
   ThreadManagementService.ThreadManagementService,
   OrchestratorMcpService.OrchestratorMcpService,
+];
+const consultAdvisorDependencies = [
+  ...dependencies,
+  ProjectionStore.ProjectionStoreV2,
+  ServerSettings.ServerSettingsService,
 ];
 /** Listing this environment's links. */
 const linkDependencies = [...dependencies, PeerForwarding.PeerForwarding];
@@ -94,6 +101,31 @@ const DelegateTaskTool = Tool.make("delegate_task", {
 })
   .annotate(Tool.Title, "Delegate a child task")
   .annotate(Tool.Destructive, true)
+  .annotate(Tool.OpenWorld, true);
+
+const ConsultAdvisorTool = Tool.make("consult_advisor", {
+  description:
+    "Ask Claude one question in a fresh conversation. Write `brief` with the goal, the relevant code, and the exact question. `includeTranscript` only when the thread is short. Your own model does not change.",
+  parameters: Schema.Struct({
+    question: TrimmedNonEmptyString,
+    brief: TrimmedNonEmptyString,
+    includeTranscript: Schema.optional(Schema.Boolean),
+    timeoutMs: Schema.optional(Schema.Finite),
+  }),
+  success: Schema.Union([
+    Schema.Struct({ status: Schema.Literal("answered"), answer: Schema.String }),
+    Schema.Struct({ status: Schema.Literal("pending"), taskId: Schema.String }),
+    Schema.Struct({
+      status: Schema.Literal("rejected"),
+      reason: Schema.Literals(["transcript_too_long", "advisor_unavailable"]),
+    }),
+  ]),
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies: consultAdvisorDependencies,
+})
+  .annotate(Tool.Title, "Consult the advisor")
+  .annotate(Tool.Destructive, false)
   .annotate(Tool.OpenWorld, true);
 
 const TaskStatusTool = Tool.make("task_status", {
@@ -350,6 +382,7 @@ const EnvironmentUnlinkTool = Tool.make("t3_environment_unlink", {
 export const OrchestratorToolkit = Toolkit.make(
   OrchestratorCapabilitiesTool,
   DelegateTaskTool,
+  ConsultAdvisorTool,
   TaskStatusTool,
   TaskCancelTool,
   WorkflowStopTool,

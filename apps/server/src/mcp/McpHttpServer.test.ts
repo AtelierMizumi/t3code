@@ -6,6 +6,9 @@ import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   EnvironmentId,
+  MessageId,
+  type OrchestrationV2ThreadProjection,
+  type OrchestrationV2ThreadShell,
   OrchestratorMcpEnvironmentTarget,
   OrchestratorMcpFailure,
   PreviewTabId,
@@ -27,8 +30,14 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as PullRequestReviewGuideService from "../pullRequest/PullRequestReviewGuideService.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { DEFAULT_HANDOFF_TOKEN_CAP } from "@t3tools/provider-core/server/handoffBudget";
 import { advertisedJsonSchema } from "./advertisedJsonSchema.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
+import * as OrchestratorHandlers from "./toolkits/orchestrator/handlers.ts";
+import * as PeerForwarding from "../peer/PeerForwarding.ts";
+import * as PeerLinkRequests from "../peer/PeerLinkRequests.ts";
+import * as PeerLinks from "../peer/PeerLinks.ts";
+import * as ThreadMetadataMcpService from "./ThreadMetadataMcpService.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 import * as McpToolAccessTestkit from "./McpToolAccess.testkit.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
@@ -1221,3 +1230,75 @@ it.effect(
       }),
     ).pipe(Effect.provide(NodeHttpServer.layerTest)),
 );
+
+it.effect("consult_advisor rejects a transcript above the handoff cap", () => {
+  const delegated: Array<unknown> = [];
+  const longMessage = {
+    item: {
+      id: "item-long",
+      threadId,
+      runId: null,
+      providerThreadId: null,
+      status: "completed",
+      type: "user_message",
+      createdBy: "user",
+      creationSource: "web",
+      inputIntent: "turn_start",
+      messageId: MessageId.make("message-long"),
+      text: "x".repeat(DEFAULT_HANDOFF_TOKEN_CAP * 2),
+      attachments: [],
+    },
+  };
+  const layer = McpHttpServer.toolkitRegistration(
+    OrchestratorToolkit,
+    OrchestratorHandlers.layer,
+  ).pipe(
+    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provide(
+      Layer.mergeAll(
+        McpToolAccessTestkit.liveThreadsLayer,
+        Layer.mock(OrchestratorMcpService.OrchestratorMcpService)({
+          delegateTask: (_scope, input) =>
+            Effect.sync(() => delegated.push(input)).pipe(Effect.die),
+        }),
+        Layer.mock(ThreadMetadataMcpService.ThreadMetadataMcpService)({}),
+        Layer.mock(PeerForwarding.PeerForwarding)({}),
+        Layer.mock(PeerLinkRequests.PeerLinkRequests)({}),
+        Layer.mock(PeerLinks.PeerLinks)({}),
+        Layer.mock(ProjectionStore.ProjectionStoreV2)({
+          getThreadShell: () =>
+            Effect.succeed({
+              id: threadId,
+              projectId: "project-1",
+            } as unknown as OrchestrationV2ThreadShell),
+          getThreadProjection: () =>
+            Effect.succeed({
+              visibleTurnItems: [longMessage],
+            } as unknown as OrchestrationV2ThreadProjection),
+        }),
+        ServerSettings.layerTest(),
+        NodeServices.layer,
+      ),
+    ),
+  );
+  return Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const result = yield* server
+      .callTool({
+        name: "consult_advisor",
+        arguments: { question: "Is this safe?", brief: "Long thread.", includeTranscript: true },
+      })
+      .pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, {
+          ...invocation,
+          capabilities: new Set(["orchestration"] as const),
+        }),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+    expect(result.structuredContent).toEqual({
+      status: "rejected",
+      reason: "transcript_too_long",
+    });
+    expect(delegated).toHaveLength(0);
+  }).pipe(Effect.provide(layer));
+});

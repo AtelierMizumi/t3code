@@ -11,6 +11,7 @@ import { ServerConfig } from "../config.ts";
 import { DeviceService } from "../device/DeviceService.ts";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
 import { GitWorkflowService } from "../git/GitWorkflowService.ts";
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as McpHttpServer from "../mcp/McpHttpServer.ts";
 import { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
 import {
@@ -67,6 +68,7 @@ const toolHandlerServices = Layer.mergeAll(
   Layer.mock(ScheduledTaskService)({}),
   Layer.mock(SecretRequests)({}),
   ServerConfig.layerTest(process.cwd(), { prefix: "t3-agent-context-budget-" }),
+  Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
   Layer.mock(ServerEnvironment)({}),
   Layer.mock(ServerSecretStore)({}),
   Layer.mock(ServerSettingsService)({}),
