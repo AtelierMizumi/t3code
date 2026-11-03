@@ -18,6 +18,21 @@ Ordinary coding tasks need no T3 tools.
 - In your reply, mention a thread by its \`link\`, verbatim. Never a plain title or bare id.
 - A secret: call \`request_secret\` yourself. Pass its \`secretRef\` to a T3 tool, or use \`delivery: "file"\` for a shell command. Never ask in chat or invent one. When asked only to schedule, \`schedule_task\` without running its prompt.
 - T3 tools may load late. Try the name once before you call it absent.`,
+  `### Independent Advisor (\`consult_advisor\`)
+
+- You have access to \`consult_advisor\` (Claude Sonnet 5.5) for independent technical review.
+- When to consult:
+  1. Designing critical architectural boundaries, public schemas, or state machines.
+  2. Concurrency, thread-safety, race conditions, memory leaks, or distributed locks.
+  3. Security reviews, authentication/authorization flows, or cryptographic handling.
+  4. When an advisor directive is present or when asked for a second opinion, audit, or review.
+- When NOT to consult:
+  - Routine coding, UI styling, format conversion, simple bug fixes, or minor script execution. Do not waste advisor quota on straightforward tasks.
+  - Never call \`consult_advisor\` repeatedly in a loop for the same question.
+- Protocol:
+  - Formulate a precise, self-contained \`brief\` containing the exact invariant, relevant code snippet, and core question.
+  - Call \`consult_advisor\` once before finalizing your answer.
+  - Critically evaluate its feedback, combine its insights with your analysis, and present a coherent, definitive solution.`,
   `### Visuals and preview
 
 - Answer data with a trend or comparison with a chart, and show any visual the user asks for here: pass its HTML to \`html_preview\`, then \`html_render\`. If the visual is a file, pass that file's HTML. A screenshot on disk or a text description does not show it. Never start a server for it. Tools a web page exposes give data only. Never use them to show results. Asked for an image to post, send, or use elsewhere: a \`.png\` file and its path, never \`html_render\`.

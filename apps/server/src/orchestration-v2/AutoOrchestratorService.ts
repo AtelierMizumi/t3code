@@ -1,11 +1,10 @@
 import {
   type AutoOrchestratorTier,
   classifyPromptIntent,
+  type GeminiEffort,
   stripRoutingTags,
 } from "@t3tools/shared/autoOrchestrator/intentMatcher";
 import {
-  AUTO_ORCHESTRATOR_INSTANCE_ID,
-  AUTO_ORCHESTRATOR_MODEL_SLUG,
   type AutoOrchestratorTierConfig,
   type ModelSelection,
   ProviderInstanceId,
@@ -25,8 +24,8 @@ export const DEFAULT_AUTO_ORCHESTRATOR_TIER_CONFIG: AutoOrchestratorTierConfig =
     model: "gemini-3.8-flash-high",
   },
   tier3: {
-    instanceId: ProviderInstanceId.make("opencode"),
-    model: "orcarouter/deepseek/deepseek-v4-flash-free",
+    instanceId: ProviderInstanceId.make("antigravity"),
+    model: "gemini-3.8-flash-low",
   },
   fallback: {
     instanceId: ProviderInstanceId.make("antigravity"),
@@ -39,7 +38,6 @@ export const DEFAULT_AUTO_ORCHESTRATOR_TIER_CONFIG: AutoOrchestratorTierConfig =
 export interface ResolveTurnSelectionInput {
   readonly threadId: ThreadId;
   readonly promptText: string;
-  readonly previousActiveSelection?: ModelSelection | undefined;
   readonly tierConfig?: Partial<AutoOrchestratorTierConfig> | undefined;
   readonly availableProviderInstanceIds: ReadonlyArray<string>;
 }
@@ -63,6 +61,15 @@ export class AutoOrchestratorService extends Context.Service<
   AutoOrchestratorService,
   AutoOrchestratorServiceShape
 >()("t3/orchestration-v2/AutoOrchestratorService") {}
+
+// Antigravity encodes Gemini effort in the model slug; other providers keep their configured model.
+function withGeminiEffort(
+  selection: ModelSelection,
+  effort: GeminiEffort | undefined,
+): ModelSelection {
+  if (effort === undefined || selection.instanceId !== "antigravity") return selection;
+  return { instanceId: selection.instanceId, model: `gemini-3.8-flash-${effort}` };
+}
 
 function skillInstructionFor(skillName: string): string {
   switch (skillName) {
@@ -92,42 +99,11 @@ export const layer: Layer.Layer<AutoOrchestratorService> = Layer.succeed(AutoOrc
       const cleanedPrompt = stripRoutingTags(input.promptText);
 
       let chosenTier: AutoOrchestratorTier = classification.tier;
-      let chosenSelection: ModelSelection =
-        chosenTier === 1 ? config.tier1 : chosenTier === 3 ? config.tier3 : config.tier2;
+      let chosenSelection: ModelSelection = withGeminiEffort(
+        chosenTier === 1 ? config.tier1 : chosenTier === 3 ? config.tier3 : config.tier2,
+        classification.effort,
+      );
       let reason = classification.reason;
-
-      if (classification.overrideTag === "@zcode") {
-        chosenSelection = {
-          instanceId: ProviderInstanceId.make("zcode"),
-          model: "GLM-5.3",
-        };
-        reason = "Explicit @zcode override";
-      }
-
-      // Smart Stickiness: If no explicit tag override, and previous selection is active,
-      // and current prompt is a follow-up or default coding intent, stick to previous selection
-      if (
-        config.enableSmartStickiness !== false &&
-        !classification.overrideTag &&
-        input.previousActiveSelection &&
-        input.previousActiveSelection.instanceId !== AUTO_ORCHESTRATOR_INSTANCE_ID
-      ) {
-        const isStrongIntentShift =
-          classification.tier === 1 && classification.triggeredSkill !== undefined;
-
-        if (!isStrongIntentShift && availableSet.has(input.previousActiveSelection.instanceId)) {
-          chosenSelection = input.previousActiveSelection;
-          reason = `Smart Stickiness: Continuing session with ${input.previousActiveSelection.instanceId}`;
-          // Determine tier of sticky selection
-          if (input.previousActiveSelection.instanceId === config.tier1.instanceId) {
-            chosenTier = 1;
-          } else if (input.previousActiveSelection.instanceId === config.tier3.instanceId) {
-            chosenTier = 3;
-          } else {
-            chosenTier = 2;
-          }
-        }
-      }
 
       // Fallback safety check: Is the chosen provider instance available?
       if (!availableSet.has(chosenSelection.instanceId)) {

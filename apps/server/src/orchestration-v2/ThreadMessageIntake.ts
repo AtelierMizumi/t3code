@@ -1,13 +1,24 @@
 import { remapComposerContextAttachments } from "@t3tools/shared/composerContextReferences";
 import { appendUserInputAttachmentPaths } from "../provider/userInputAttachments.ts";
-import type { ChatAttachment, OrchestrationV2Command } from "@t3tools/contracts";
+import {
+  AUTO_ORCHESTRATOR_INSTANCE_ID,
+  ProviderInstanceId,
+  resolveProjectProviderInstanceEnabled,
+  type ChatAttachment,
+  type OrchestrationV2Command,
+  type OrchestrationV2ThreadProjection,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { resolveAttachmentPath } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 
 import * as AttachmentClaims from "./AttachmentClaims.ts";
+import { DEFAULT_AUTO_ORCHESTRATOR_TIER_CONFIG } from "./AutoOrchestratorService.ts";
+import * as AutoOrchestratorService from "./AutoOrchestratorService.ts";
+import { resolveDispatchSelection } from "./AutoOrchestratorLock.ts";
 import * as ThreadLaunch from "./ThreadLaunchService.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 
@@ -53,15 +64,66 @@ const releaseUnusedClaims = Effect.fn("ThreadMessageIntake.releaseUnusedClaims")
   );
 });
 
+type MessageDispatchCommand = Extract<
+  OrchestrationV2Command,
+  { readonly type: "message.dispatch" }
+>;
+
 /**
  * A guest message goes out with the files the guest attached, never ones a client names. They
  * are already the thread's attachments. A message no longer waiting gets none; the orchestrator
  * then refuses or replays the send.
  */
-const withGuestAttachments = Effect.fn("ThreadMessageIntake.withGuestAttachments")(function* (
-  command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
-) {
+const withGuestAttachments = (
+  command: MessageDispatchCommand,
+  projection: OrchestrationV2ThreadProjection,
+): MessageDispatchCommand => {
   if (command.guestMessageId === undefined) return command;
+  const message = projection.thread.guestShare?.messages.find(
+    (candidate) => candidate.id === command.guestMessageId && candidate.status === "pending",
+  );
+  return { ...command, attachments: message?.attachments ?? [] };
+};
+
+const withLockedModelSelection = Effect.fn("ThreadMessageIntake.withLockedModelSelection")(
+  function* (command: MessageDispatchCommand, projection: OrchestrationV2ThreadProjection) {
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const serverSettings = yield* settings.getSettings;
+    const projectId = projection.thread.projectId;
+    const resolved = yield* resolveDispatchSelection({
+      commandModelSelection: command.modelSelection,
+      threadModelSelection: projection.thread.modelSelection,
+      hasRuns: projection.runs.length > 0,
+      text: command.text,
+      // Unlisted instances are enabled by default, so tier targets count even when absent from settings.
+      availableProviderInstanceIds: [
+        ...new Set([
+          ...Object.keys(serverSettings.providerInstances),
+          ...Object.values(DEFAULT_AUTO_ORCHESTRATOR_TIER_CONFIG).flatMap((tier) =>
+            typeof tier === "object" ? [tier.instanceId] : [],
+          ),
+        ]),
+      ].filter((id) =>
+        resolveProjectProviderInstanceEnabled(
+          serverSettings,
+          projectId,
+          ProviderInstanceId.make(id),
+        ),
+      ),
+    });
+    return {
+      ...command,
+      text: resolved.text,
+      ...(resolved.modelSelection ? { modelSelection: resolved.modelSelection } : {}),
+    };
+  },
+);
+
+const prepareMessageDispatch = Effect.fn("ThreadMessageIntake.prepareMessageDispatch")(function* (
+  command: MessageDispatchCommand,
+) {
+  const locksSelection = command.modelSelection?.instanceId === AUTO_ORCHESTRATOR_INSTANCE_ID;
+  if (command.guestMessageId === undefined && !locksSelection) return command;
   const threads = yield* ThreadManagement.ThreadManagementService;
   // Only the thread record is needed; the window keeps the read small.
   const { projection } = yield* threads
@@ -70,22 +132,27 @@ const withGuestAttachments = Effect.fn("ThreadMessageIntake.withGuestAttachments
       Effect.mapError(
         (cause) =>
           new AttachmentClaims.AttachmentClaimError({
-            message: "Failed to read the guest message.",
+            message:
+              command.guestMessageId === undefined
+                ? "Failed to read the thread."
+                : "Failed to read the guest message.",
             cause,
           }),
       ),
     );
-  const message = projection.thread.guestShare?.messages.find(
-    (candidate) => candidate.id === command.guestMessageId && candidate.status === "pending",
-  );
-  return { ...command, attachments: message?.attachments ?? [] };
+  const withAttachments = withGuestAttachments(command, projection);
+  return locksSelection
+    ? yield* withLockedModelSelection(withAttachments, projection).pipe(
+        Effect.provide(AutoOrchestratorService.layer),
+      )
+    : withAttachments;
 });
 
 export const dispatchCommand = Effect.fn("ThreadMessageIntake.dispatchCommand")(function* (
   incoming: OrchestrationV2Command,
 ) {
   const command =
-    incoming.type === "message.dispatch" ? yield* withGuestAttachments(incoming) : incoming;
+    incoming.type === "message.dispatch" ? yield* prepareMessageDispatch(incoming) : incoming;
   const threads = yield* ThreadManagement.ThreadManagementService;
   if (command.type === "runtime-request.respond" && command.attachmentsByQuestionId) {
     const config = yield* ServerConfig.ServerConfig;

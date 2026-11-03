@@ -5,11 +5,13 @@ import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
+  AUTO_ORCHESTRATOR_INSTANCE_ID,
   ChatAttachmentId,
   CommandId,
   EventId,
   GuestMessageId,
   MessageId,
+  ProviderInstanceId,
   RuntimeRequestId,
   ThreadId,
   TurnItemId,
@@ -425,4 +427,132 @@ it.effect("sends a guest message with the guest's files, never ones the client n
     // The guest's file, which is already the thread's.
     expect(command.attachments).toEqual([guestFile]);
   }).pipe(Effect.provide(layerIntakeTest)),
+);
+
+const layerAntigravityListed = ServerConfig.layerTest(process.cwd(), {
+  prefix: "t3-question-intake-",
+}).pipe(
+  Layer.provideMerge(DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer))),
+  Layer.provideMerge(
+    ServerSettings.layerTest({
+      providerInstances: { antigravity: { driver: "antigravity", enabled: true, config: {} } },
+    } as never),
+  ),
+);
+
+it.effect("locks an auto_orchestrator selection to a concrete model before dispatch", () =>
+  Effect.gen(function* () {
+    const captured: OrchestrationV2ServerCommand[] = [];
+    const layerFreshThread = Layer.mock(ThreadManagementService.ThreadManagementService)({
+      dispatch: layerFailingDispatchHandler(captured),
+      getThreadSnapshotWindow: () =>
+        Effect.succeed({
+          projection: {
+            thread: {
+              modelSelection: { instanceId: AUTO_ORCHESTRATOR_INSTANCE_ID, model: "auto" },
+            },
+            runs: [],
+          },
+        } as unknown as Effect.Success<
+          ReturnType<
+            ThreadManagementService.ThreadManagementServiceShape["getThreadSnapshotWindow"]
+          >
+        >),
+    });
+    yield* dispatchCommand({
+      type: "message.dispatch",
+      commandId: CommandId.make("send-auto-message"),
+      threadId: ThreadId.make("thread-auto"),
+      messageId: MessageId.make("message-auto"),
+      text: "hello",
+      attachments: [],
+      modelSelection: {
+        instanceId: ProviderInstanceId.make(AUTO_ORCHESTRATOR_INSTANCE_ID),
+        model: "auto",
+      },
+      dispatchMode: { type: "queue_after_active" },
+      createdBy: "user",
+      creationSource: "web",
+    }).pipe(Effect.provide(layerFreshThread), Effect.result);
+    const command = captured[0];
+    if (command?.type !== "message.dispatch") throw new Error("Expected a message dispatch.");
+    expect(command.modelSelection?.instanceId).toBe("antigravity");
+    expect(command.modelSelection?.model).toBe("gemini-3.8-flash-medium");
+  }).pipe(Effect.provide(layerAntigravityListed)),
+);
+
+it.effect("reports a failed guest message read as an attachment claim error", () =>
+  Effect.gen(function* () {
+    const layerFailingRead = Layer.mock(ThreadManagementService.ThreadManagementService)({
+      getThreadSnapshotWindow: () =>
+        Effect.fail(
+          new OrchestratorDispatchError({
+            commandId: CommandId.make("send-guest-unreadable"),
+            commandType: "message.dispatch",
+            cause: "read failed",
+          }),
+        ) as never,
+    });
+    const result = yield* dispatchCommand({
+      type: "message.dispatch",
+      commandId: CommandId.make("send-guest-unreadable"),
+      threadId: ThreadId.make("thread-guest-unreadable"),
+      messageId: MessageId.make("message-guest-unreadable"),
+      guestMessageId: GuestMessageId.make("guest-message:unreadable"),
+      text: "",
+      attachments: [],
+      dispatchMode: { type: "queue_after_active" },
+      createdBy: "user",
+      creationSource: "web",
+    }).pipe(Effect.provide(layerFailingRead), Effect.flip);
+    expect(result).toMatchObject({
+      _tag: "AttachmentClaimError",
+      message: "Failed to read the guest message.",
+    });
+  }).pipe(Effect.provide(layerIntakeTest)),
+);
+
+it.effect(
+  "counts an unlisted claudeAgent as enabled when locking an auto_orchestrator selection",
+  () =>
+    Effect.gen(function* () {
+      const settings = yield* ServerSettings.ServerSettingsService;
+      expect((yield* settings.getSettings).providerInstances).not.toHaveProperty("claudeAgent");
+      expect((yield* settings.getSettings).providerInstances).toHaveProperty("antigravity");
+      const captured: OrchestrationV2ServerCommand[] = [];
+      const layerFreshThread = Layer.mock(ThreadManagementService.ThreadManagementService)({
+        dispatch: layerFailingDispatchHandler(captured),
+        getThreadSnapshotWindow: () =>
+          Effect.succeed({
+            projection: {
+              thread: {
+                modelSelection: { instanceId: AUTO_ORCHESTRATOR_INSTANCE_ID, model: "auto" },
+              },
+              runs: [],
+            },
+          } as unknown as Effect.Success<
+            ReturnType<
+              ThreadManagementService.ThreadManagementServiceShape["getThreadSnapshotWindow"]
+            >
+          >),
+      });
+      yield* dispatchCommand({
+        type: "message.dispatch",
+        commandId: CommandId.make("send-auto-review"),
+        threadId: ThreadId.make("thread-auto-review"),
+        messageId: MessageId.make("message-auto-review"),
+        text: "review this security issue",
+        attachments: [],
+        modelSelection: {
+          instanceId: ProviderInstanceId.make(AUTO_ORCHESTRATOR_INSTANCE_ID),
+          model: "auto",
+        },
+        dispatchMode: { type: "queue_after_active" },
+        createdBy: "user",
+        creationSource: "web",
+      }).pipe(Effect.provide(layerFreshThread), Effect.result);
+      const command = captured[0];
+      if (command?.type !== "message.dispatch") throw new Error("Expected a message dispatch.");
+      expect(command.modelSelection?.instanceId).toBe("claudeAgent");
+    }).pipe(Effect.provide(layerAntigravityListed)),
 );

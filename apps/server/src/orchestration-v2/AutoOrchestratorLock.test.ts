@@ -1,0 +1,140 @@
+import { describe, expect, it } from "vite-plus/test";
+import {
+  AUTO_ORCHESTRATOR_INSTANCE_ID,
+  ModelSelection,
+  ProviderInstanceId,
+} from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import { ADVISOR_DIRECTIVE, resolveDispatchSelection } from "./AutoOrchestratorLock.ts";
+import { layer as AutoOrchestratorServiceLive } from "./AutoOrchestratorService.ts";
+
+describe("resolveDispatchSelection", () => {
+  const autoSelection: ModelSelection = {
+    instanceId: ProviderInstanceId.make(AUTO_ORCHESTRATOR_INSTANCE_ID),
+    model: "auto",
+  };
+  const codexSelection: ModelSelection = {
+    instanceId: ProviderInstanceId.make("codex"),
+    model: "gpt-5",
+  };
+  const claudeSelection: ModelSelection = {
+    instanceId: ProviderInstanceId.make("claudeAgent"),
+    model: "claude-sonnet-5-5",
+  };
+  const geminiSelection: ModelSelection = {
+    instanceId: ProviderInstanceId.make("antigravity"),
+    model: "gemini-3.8-flash-high",
+  };
+  const available = ["claudeAgent", "antigravity", "codex"];
+
+  const run = (input: Parameters<typeof resolveDispatchSelection>[0]) =>
+    resolveDispatchSelection(input).pipe(
+      Effect.provide(AutoOrchestratorServiceLive),
+      Effect.runPromise,
+    );
+
+  it("passes a non-auto command selection through unchanged", async () => {
+    const result = await run({
+      commandModelSelection: codexSelection,
+      threadModelSelection: autoSelection,
+      hasRuns: false,
+      text: "@claude hello",
+      availableProviderInstanceIds: available,
+    });
+    expect(result.modelSelection).toEqual(codexSelection);
+    expect(result.text).toBe("@claude hello");
+  });
+
+  it("keeps the thread's concrete selection when the command asks for auto_orchestrator", async () => {
+    const result = await run({
+      commandModelSelection: autoSelection,
+      threadModelSelection: codexSelection,
+      hasRuns: true,
+      text: "hello",
+      availableProviderInstanceIds: available,
+    });
+    expect(result.modelSelection).toEqual(codexSelection);
+    expect(result.text).toBe("hello");
+  });
+
+  it("attaches advisor directive to locked thread when prompt naturally asks for advisor or second opinion", async () => {
+    const result = await run({
+      commandModelSelection: autoSelection,
+      threadModelSelection: geminiSelection,
+      hasRuns: true,
+      text: "cho tôi second opinion về race condition ở queue này",
+      availableProviderInstanceIds: available,
+    });
+    expect(result.modelSelection).toEqual(geminiSelection);
+    expect(result.text).toBe(
+      `cho tôi second opinion về race condition ở queue này\n\n${ADVISOR_DIRECTIVE}`,
+    );
+  });
+
+  it("attaches advisor directive to locked thread when prompt mentions nhờ claude", async () => {
+    const result = await run({
+      commandModelSelection: autoSelection,
+      threadModelSelection: geminiSelection,
+      hasRuns: true,
+      text: "nhờ claude xem giúp tôi đoạn logic này",
+      availableProviderInstanceIds: available,
+    });
+    expect(result.modelSelection).toEqual(geminiSelection);
+    expect(result.text).toBe(`nhờ claude xem giúp tôi đoạn logic này\n\n${ADVISOR_DIRECTIVE}`);
+  });
+
+  it("resolves through the orchestrator while the thread is still on auto_orchestrator and attaches directive", async () => {
+    const result = await run({
+      commandModelSelection: autoSelection,
+      threadModelSelection: autoSelection,
+      hasRuns: false,
+      text: "thiết kế spec cho module auth và nhờ claude tham vấn",
+      availableProviderInstanceIds: available,
+    });
+    expect(result.modelSelection?.instanceId).toBe("claudeAgent");
+    expect(result.modelSelection).toEqual(claudeSelection);
+    expect(result.text).toBe(
+      `thiết kế spec cho module auth và nhờ claude tham vấn\n\n${ADVISOR_DIRECTIVE}`,
+    );
+  });
+
+  it("turns the @claude tag into an advisor directive and keeps the intent tier model", async () => {
+    const result = await run({
+      commandModelSelection: autoSelection,
+      threadModelSelection: autoSelection,
+      hasRuns: false,
+      text: "@claude is this race condition safe?",
+      availableProviderInstanceIds: available,
+    });
+    expect(result.text).toBe(`is this race condition safe?\n\n${ADVISOR_DIRECTIVE}`);
+    expect(result.text).not.toContain("@claude");
+    expect(result.modelSelection?.instanceId).toBe("antigravity");
+  });
+
+  it("keeps the intent tier model for a @claude coding prompt instead of locking on Claude", async () => {
+    const result = await run({
+      commandModelSelection: autoSelection,
+      threadModelSelection: autoSelection,
+      hasRuns: false,
+      text: "@claude fix this bug: server crash",
+      availableProviderInstanceIds: available,
+    });
+    expect(result.modelSelection).toEqual({
+      instanceId: ProviderInstanceId.make("antigravity"),
+      model: "gemini-3.8-flash-high",
+    });
+    expect(result.text).toBe(`fix this bug: server crash\n\n${ADVISOR_DIRECTIVE}`);
+  });
+
+  it("uses the thread's selection when the command carries none", async () => {
+    const result = await run({
+      commandModelSelection: undefined,
+      threadModelSelection: codexSelection,
+      hasRuns: true,
+      text: "hi",
+      availableProviderInstanceIds: available,
+    });
+    expect(result.modelSelection).toEqual(codexSelection);
+    expect(result.text).toBe("hi");
+  });
+});

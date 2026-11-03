@@ -2,6 +2,7 @@ import { OrchestratorMcpFailure } from "@t3tools/contracts";
 import { OrchestratorToolkit } from "./tools.ts";
 import * as Effect from "effect/Effect";
 
+import { AdvisorError, consult } from "../../../orchestration-v2/AdvisorService.ts";
 import * as PeerForwarding from "../../../peer/PeerForwarding.ts";
 import * as PeerLinkRequests from "../../../peer/PeerLinkRequests.ts";
 import * as PeerLinks from "../../../peer/PeerLinks.ts";
@@ -25,6 +26,24 @@ const handlers = {
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;
       return yield* service.delegateTask(scope, input);
     }),
+  ),
+  consult_advisor: McpToolAccess.actsAsCaller(({ includeTranscript, ...input }) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const caller = yield* McpInvocationContext.requireThreadScope(scope, "consult_advisor");
+      return yield* consult({
+        ...input,
+        parentThreadId: caller.thread.threadId,
+        includeTranscript: includeTranscript ?? false,
+      });
+    }).pipe(
+      Effect.catchTags({
+        AdvisorError: (error: AdvisorError) =>
+          Effect.fail(
+            new OrchestratorMcpFailure({ code: "orchestration_error", message: error.message }),
+          ),
+      }),
+    ),
   ),
   task_status: McpToolAccess.actsAsCaller(({ taskId }) =>
     Effect.gen(function* () {

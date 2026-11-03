@@ -29,7 +29,6 @@ const PROVIDER_TEXT_COLOR_BY_PROVIDER: Partial<Record<ProviderDriverKind, string
   [ProviderDriverKind.make("codex")]: "text-black dark:text-white",
   [ProviderDriverKind.make("claudeAgent")]: "text-[#d97757]",
   [ProviderDriverKind.make("antigravity")]: "text-[#5b87bf]",
-  [ProviderDriverKind.make("zcode")]: "text-[#1A7AFF]",
   [ProviderDriverKind.make("auto_orchestrator")]: "text-[#F59E0B]",
 };
 
@@ -103,7 +102,7 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
       data-provider-accent-color={accentColor}
     >
       {props.driverKind === "auto_orchestrator" ? (
-        <Zap className={cn("size-5 shrink-0 text-amber-500", iconClassName)} aria-hidden />
+        <Zap className={cn("size-5 shrink-0 text-warning", iconClassName)} aria-hidden />
       ) : isAcpRegistry ? (
         <AcpRegistryAgentIcon
           className={cn("size-5 rounded-none bg-transparent", iconClassName)}

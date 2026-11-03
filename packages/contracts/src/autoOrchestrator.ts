@@ -2,7 +2,6 @@ import * as Schema from "effect/Schema";
 import { ModelSelection } from "./modelSelection.ts";
 
 export const AUTO_ORCHESTRATOR_INSTANCE_ID = "auto_orchestrator" as const;
-export const AUTO_ORCHESTRATOR_MODEL_SLUG = "hybrid-router" as const;
 
 export const AutoOrchestratorTierConfig = Schema.Struct({
   tier1: ModelSelection,
