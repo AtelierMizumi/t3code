@@ -1,9 +1,11 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as TestClock from "effect/testing/TestClock";
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
 
 import { makeAntigravityUsageProbe } from "./antigravityUsageLimits.ts";
@@ -59,6 +61,7 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
     tokenStatus?: number;
     refreshToken?: string;
     userId?: string;
+    userInfoAt?: number;
     missingToken?: boolean;
     authMethod?: "oauth-personal" | "gemini-api-key";
   } = {},
@@ -107,6 +110,7 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
         );
       }
       expect(JSON.parse(body)).toEqual({ project: "project-id" });
+      expect(request.headers["user-agent"]).toMatch(/^antigravity\/hub\/2\.24\.0 /);
       return HttpClientResponse.fromWeb(
         request,
         request.url.endsWith(":retrieveUserQuotaSummary")
@@ -115,7 +119,13 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
             })
           : Response.json(options.models ?? { models: {} }),
       );
-    }),
+    }).pipe(
+      Effect.tap(() =>
+        request.url.endsWith("/userinfo") && options.userInfoAt !== undefined
+          ? TestClock.setTime(options.userInfoAt)
+          : Effect.void,
+      ),
+    ),
   );
   const usage = yield* makeAntigravityUsageProbe({
     profileDirectory,
@@ -152,6 +162,68 @@ describe("Antigravity subscription limits", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("omits rolling resets for untouched summary buckets and keeps used Gemini resets", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(DateTime.toEpochMillis(DateTime.makeUnsafe("2026-10-21T10:16:04Z")));
+      const { probe } = yield* fixture({
+        summary: {
+          groups: [
+            {
+              buckets: [
+                {
+                  bucketId: "3p-5h",
+                  window: "5h",
+                  remainingFraction: 1,
+                  resetTime: "2026-10-21T15:16:05Z",
+                },
+                {
+                  bucketId: "3p-weekly",
+                  window: "weekly",
+                  remainingFraction: 1,
+                  resetTime: "2026-10-28T10:16:05Z",
+                },
+                {
+                  bucketId: "gemini-5h",
+                  window: "5h",
+                  remainingFraction: 0.848104,
+                  resetTime: "2026-10-21T13:29:53Z",
+                  description:
+                    "You have used some of your 5-hour limit, it will fully refresh in 3 hours, 13 minutes.",
+                },
+                {
+                  bucketId: "gemini-weekly",
+                  window: "weekly",
+                  remainingFraction: 0.9620177,
+                  resetTime: "2026-10-28T08:29:53Z",
+                  description:
+                    "You have used some of your weekly limit, it will fully refresh in 6 days, 22 hours.",
+                },
+              ],
+            },
+          ],
+        },
+      });
+      const limits = yield* probe;
+      const byId = new Map(limits.windows.map((window) => [window.id, window]));
+      expect(byId.get("3p-5h")).toEqual({
+        id: "3p-5h",
+        label: "Claude & GPT (shared) · 5-hour",
+        kind: "session",
+        usedPercent: 0,
+        windowDurationMins: 300,
+      });
+      expect(byId.get("3p-weekly")).toEqual({
+        id: "3p-weekly",
+        label: "Claude & GPT (shared) · Weekly",
+        kind: "weekly",
+        usedPercent: 0,
+        windowDurationMins: 10080,
+      });
+      expect(byId.get("gemini-5h")?.resetsAt).toBe("2026-10-21T13:29:53.000Z");
+      expect(byId.get("gemini-weekly")?.resetsAt).toBe("2026-10-28T08:29:53.000Z");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("merges quota groups that only one endpoint reports", () =>
     Effect.gen(function* () {
       const { probe } = yield* fixture({
@@ -181,6 +253,64 @@ describe("Antigravity subscription limits", () => {
       expect(byId.get("gemini-weekly")?.label).toBe("Gemini · Weekly");
       expect(byId.get("3p-5h")?.usedPercent).toBeCloseTo(70);
       expect(byId.get("3p-weekly")?.usedPercent).toBe(100);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("labels Argon's weekly quota apart from the default Gemini weekly quota", () =>
+    Effect.gen(function* () {
+      const { probe } = yield* fixture({
+        summary: {
+          groups: [
+            ...summary.groups,
+            {
+              displayName: "Gemini 4 Argon",
+              buckets: [
+                { bucketId: "gemini-argon-wtu-weekly", window: "weekly", remainingFraction: 0.6 },
+              ],
+            },
+          ],
+        },
+      });
+      const limits = yield* probe;
+      const byId = new Map(limits.windows.map((window) => [window.id, window]));
+      expect(byId.get("gemini-weekly")?.label).toBe("Gemini · Weekly");
+      expect(byId.get("gemini-argon-wtu-weekly")?.label).toBe("Gemini 4 Argon · Weekly");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("merges Gemini model quotas when retrieveUserQuotaSummary only returns 3p models", () =>
+    Effect.gen(function* () {
+      const { probe } = yield* fixture({
+        summary: {
+          groups: [
+            {
+              displayName: "Claude and GPT models",
+              buckets: [
+                { bucketId: "3p-weekly", window: "weekly", remainingFraction: 0.5 },
+                { bucketId: "3p-5h", window: "5h", remainingFraction: 0.3 },
+              ],
+            },
+          ],
+        },
+        models: {
+          models: {
+            "gemini-3.8-flash-tiered": {
+              modelProvider: "MODEL_PROVIDER_GOOGLE",
+              quotaInfo: { remainingFraction: 0.8, resetTime: "2026-10-10T12:00:00Z" },
+              weeklyQuotaInfo: { remainingFraction: 0.6, resetTime: "2026-10-12T12:00:00Z" },
+            },
+          },
+        },
+      });
+      const limits = yield* probe;
+      const ids = limits.windows.map((w) => w.id).toSorted();
+      expect(ids).toContain("3p-5h");
+      expect(ids).toContain("3p-weekly");
+      expect(ids).toContain("gemini-quota");
+      expect(ids).toContain("gemini-weekly");
+      const geminiWeekly = limits.windows.find((w) => w.id === "gemini-weekly");
+      expect(geminiWeekly?.label).toBe("Gemini · Weekly");
+      expect(geminiWeekly?.usedPercent).toBe(40);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
