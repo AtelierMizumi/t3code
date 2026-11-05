@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
 import { type CommandId, ProjectId } from "./baseSchemas.ts";
+import { AUTO_ORCHESTRATOR_INSTANCE_ID } from "./autoOrchestrator.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import {
   ClientSettingsSchema,
@@ -338,6 +339,17 @@ describe("resolveProjectProviderInstanceEnabled", () => {
       },
     };
     expect(resolveProjectProviderInstanceEnabled(settings, projectId, instanceId)).toBe(false);
+  });
+
+  it("always reports auto_orchestrator as enabled for any project", () => {
+    const settings: ServerSettings = DEFAULT_SERVER_SETTINGS;
+    expect(
+      resolveProjectProviderInstanceEnabled(
+        settings,
+        projectId,
+        ProviderInstanceId.make(AUTO_ORCHESTRATOR_INSTANCE_ID),
+      ),
+    ).toBe(true);
   });
 });
 

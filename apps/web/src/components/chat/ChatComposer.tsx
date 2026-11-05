@@ -35,6 +35,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import {
+  AUTO_ORCHESTRATOR_INSTANCE_ID,
   EnvironmentRequestInvalidError,
   AuthOrchestrationOperateScope,
   ProviderDriverKind,
@@ -890,7 +891,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       activeThread?.runtime?.providerInstanceId ?? activeThreadModelSelection?.instanceId,
   });
   const noProviderAvailable =
-    selectedProviderEntry === undefined && multipleModelSelections === null;
+    selectedProviderEntry === undefined &&
+    selectedInstanceId !== AUTO_ORCHESTRATOR_INSTANCE_ID &&
+    multipleModelSelections === null;
   const providerCatalogPending = noProviderAvailable && !providerCatalogKnown;
   const showProviderUnavailable = noProviderAvailable && !providerCatalogPending;
   const providerSetupInstanceId = noProviderAvailable
@@ -910,10 +913,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     compatibleRuntimeModes.includes(option.mode),
   );
 
-  const providerSendBlockReason = getAntigravitySendBlockReason(
-    selectedProviderEntry?.snapshot,
-    selectedModel,
-  );
+  const isAutoSelection =
+    selectedInstanceId === AUTO_ORCHESTRATOR_INSTANCE_ID ||
+    selectedModel === "hybrid-router" ||
+    selectedProvider === "auto_orchestrator";
+
+  const providerSendBlockReason = isAutoSelection
+    ? null
+    : getAntigravitySendBlockReason(selectedProviderEntry?.snapshot, selectedModel);
   const sendDisabledReason =
     externalSendDisabledReason ??
     (multipleModelSelections?.length === 0 ? "Select at least one model." : null) ??

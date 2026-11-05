@@ -9,6 +9,7 @@ import type {
   ShellSnapshotOptions,
 } from "./ProjectionStore.ts";
 import {
+  AUTO_ORCHESTRATOR_INSTANCE_ID,
   type ChatAttachment,
   CommandId,
   MessageId,
@@ -554,33 +555,41 @@ const make = Effect.gen(function* () {
 
   const assertProviderInstanceEnabled: ThreadManagementServiceShape["assertProviderInstanceEnabled"] =
     (input) =>
-      receipts.getByCommandId(input.commandId).pipe(
-        Effect.orElseSucceed(() => Option.none()),
-        Effect.flatMap((receipt) =>
-          Option.isSome(receipt)
-            ? Effect.void
-            : serverSettings.getSettings.pipe(
-                Effect.orDie,
-                Effect.flatMap((current) =>
-                  resolveProjectProviderInstanceEnabled(current, input.projectId, input.instanceId)
-                    ? Effect.void
-                    : new ThreadManagementProviderInstanceDisabledError({
-                        projectId: input.projectId,
-                        instanceId: input.instanceId,
-                      }),
-                ),
-              ),
-        ),
-      );
+      input.instanceId === AUTO_ORCHESTRATOR_INSTANCE_ID
+        ? Effect.void
+        : receipts.getByCommandId(input.commandId).pipe(
+            Effect.orElseSucceed(() => Option.none()),
+            Effect.flatMap((receipt) =>
+              Option.isSome(receipt)
+                ? Effect.void
+                : serverSettings.getSettings.pipe(
+                    Effect.orDie,
+                    Effect.flatMap((current) =>
+                      resolveProjectProviderInstanceEnabled(
+                        current,
+                        input.projectId,
+                        input.instanceId,
+                      )
+                        ? Effect.void
+                        : new ThreadManagementProviderInstanceDisabledError({
+                            projectId: input.projectId,
+                            instanceId: input.instanceId,
+                          }),
+                    ),
+                  ),
+            ),
+          );
 
   const isProviderInstanceEnabledForProject: ThreadManagementServiceShape["isProviderInstanceEnabledForProject"] =
     (input) =>
-      serverSettings.getSettings.pipe(
-        Effect.orDie,
-        Effect.map((current) =>
-          resolveProjectProviderInstanceEnabled(current, input.projectId, input.instanceId),
-        ),
-      );
+      input.instanceId === AUTO_ORCHESTRATOR_INSTANCE_ID
+        ? Effect.succeed(true)
+        : serverSettings.getSettings.pipe(
+            Effect.orDie,
+            Effect.map((current) =>
+              resolveProjectProviderInstanceEnabled(current, input.projectId, input.instanceId),
+            ),
+          );
 
   const hasReceipt: ThreadManagementServiceShape["hasReceipt"] = (commandId) =>
     receipts.getByCommandId(commandId).pipe(

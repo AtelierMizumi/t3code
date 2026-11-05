@@ -4,6 +4,7 @@ import type { Dispatch } from "react";
 import type { ComposerThreadTarget, DraftSessionState } from "../../composerDraftStore";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import {
+  AUTO_ORCHESTRATOR_INSTANCE_ID,
   type EnvironmentId,
   type ModelSelection,
   ProviderInstanceId,
@@ -145,6 +146,29 @@ export function useComposerSelection(input: ComposerSelectionInput) {
     options?: { focusComposer?: boolean },
   ) => {
     if (!activeThread) return;
+    if (instanceId === AUTO_ORCHESTRATOR_INSTANCE_ID) {
+      if (!supportsProviderSwitchingViaHandoff && lockedProvider !== null) {
+        toastManager.add({
+          type: "warning",
+          title: "Cannot switch to Auto Orchestrator",
+          description: "Auto Orchestrator can only be selected when starting a new thread.",
+        });
+        if (options?.focusComposer !== false) scheduleComposerFocus();
+        return;
+      }
+      const nextModelSelection: ModelSelection = {
+        instanceId,
+        model: model || "hybrid-router",
+      };
+      setComposerDraftModelSelection(
+        scopeThreadRef(activeThread.environmentId, activeThread.id),
+        nextModelSelection,
+        { explicit: true, replaceOptions: true },
+      );
+      setStickyComposerModelSelection(nextModelSelection);
+      if (options?.focusComposer !== false) scheduleComposerFocus();
+      return;
+    }
     const entry = providerStatuses.find((snapshot) => snapshot.instanceId === instanceId);
     const resolvedDriverKind = entry?.driver ?? null;
     if (

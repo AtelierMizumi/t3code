@@ -47,6 +47,7 @@ import {
   ProviderInstanceId,
   ProviderDriverKind,
 } from "./providerInstance.ts";
+import { AUTO_ORCHESTRATOR_INSTANCE_ID } from "./autoOrchestrator.ts";
 import { PullRequestMergeMethod } from "./pullRequest.ts";
 
 export const TimestampFormat = Schema.Literals(["locale", "12-hour", "24-hour"]);
@@ -1332,7 +1333,9 @@ const DEFAULT_DISABLED_PROVIDER_DRIVERS: ReadonlySet<ProviderDriverKind> = new S
 );
 
 const DEFAULT_ENABLED_DEFAULT_INSTANCES: ReadonlySet<ProviderInstanceId> = new Set(
-  ["codex", "claudeAgent"].map((instanceId) => ProviderInstanceId.make(instanceId)),
+  ["codex", "claudeAgent", AUTO_ORCHESTRATOR_INSTANCE_ID].map((instanceId) =>
+    ProviderInstanceId.make(instanceId),
+  ),
 );
 
 export const isUnconfiguredDefaultInstanceEnabled = (instanceId: ProviderInstanceId): boolean =>
@@ -1356,6 +1359,9 @@ export const resolveProjectProviderInstanceEnabled = (
   projectId: ProjectId | null,
   instanceId: ProviderInstanceId,
 ): boolean => {
+  if (instanceId === AUTO_ORCHESTRATOR_INSTANCE_ID) {
+    return true;
+  }
   const override =
     projectId === null
       ? undefined

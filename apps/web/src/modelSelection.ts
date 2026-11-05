@@ -1,5 +1,6 @@
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
+  AUTO_ORCHESTRATOR_INSTANCE_ID,
   DEFAULT_TEXT_GENERATION_MODEL,
   DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER,
   defaultInstanceIdForDriver,
@@ -261,6 +262,9 @@ export function resolveAppModelSelectionForInstance(
   selectedModel: string | null | undefined,
   resolutionOptions?: { readonly preserveUnavailableSelection?: boolean },
 ): string | null {
+  if (instanceId === AUTO_ORCHESTRATOR_INSTANCE_ID) {
+    return selectedModel ?? "hybrid-router";
+  }
   const entry = deriveProviderInstanceEntries(providers).find(
     (candidate) => candidate.instanceId === instanceId,
   );

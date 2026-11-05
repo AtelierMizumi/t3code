@@ -11,9 +11,9 @@ describe("AutoOrchestratorService", () => {
     instanceId: ProviderInstanceId.make("claudeAgent"),
     model: "claude-sonnet-5-5",
   };
-  const flashLowSelection: ModelSelection = {
+  const flashMediumSelection: ModelSelection = {
     instanceId: ProviderInstanceId.make("antigravity"),
-    model: "gemini-3.8-flash-low",
+    model: "gemini-3.8-flash-medium",
   };
 
   const defaultAvailable = ["claudeAgent", "antigravity"];
@@ -100,7 +100,7 @@ describe("AutoOrchestratorService", () => {
         availableProviderInstanceIds: defaultAvailable,
       });
 
-      expect(result.targetSelection).toEqual(flashLowSelection);
+      expect(result.targetSelection).toEqual(flashMediumSelection);
       expect(result.activeTier).toBe(3);
     }).pipe(Effect.provide(AutoOrchestratorServiceLive), Effect.runPromise));
 

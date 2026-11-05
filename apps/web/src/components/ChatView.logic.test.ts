@@ -574,6 +574,7 @@ describe("resolveComposerProviderSelection", () => {
       "That Antigravity model is no longer available. Choose another model.",
     );
     expect(getAntigravitySendBlockReason(provider, "gemini-pro")).toBeNull();
+    expect(getAntigravitySendBlockReason(provider, "hybrid-router")).toBeNull();
   });
 
   it("allows a saved native model to retry after a provider error without changing it", () => {

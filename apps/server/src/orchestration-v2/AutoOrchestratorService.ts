@@ -25,7 +25,7 @@ export const DEFAULT_AUTO_ORCHESTRATOR_TIER_CONFIG: AutoOrchestratorTierConfig =
   },
   tier3: {
     instanceId: ProviderInstanceId.make("antigravity"),
-    model: "gemini-3.8-flash-low",
+    model: "gemini-3.8-flash-medium",
   },
   fallback: {
     instanceId: ProviderInstanceId.make("antigravity"),
@@ -68,7 +68,8 @@ function withGeminiEffort(
   effort: GeminiEffort | undefined,
 ): ModelSelection {
   if (effort === undefined || selection.instanceId !== "antigravity") return selection;
-  return { instanceId: selection.instanceId, model: `gemini-3.8-flash-${effort}` };
+  const mappedEffort = effort === "low" ? "medium" : effort;
+  return { instanceId: selection.instanceId, model: `gemini-3.8-flash-${mappedEffort}` };
 }
 
 function skillInstructionFor(skillName: string): string {

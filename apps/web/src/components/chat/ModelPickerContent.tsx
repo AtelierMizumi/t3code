@@ -615,7 +615,9 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     const tabsWithLegacyRow = new Set<ProviderInstanceId>();
     for (const model of flatModels) {
       if (!matchesLockedProvider(model)) continue;
-      const isFavorite = favoritesSet.has(providerModelKey(model.instanceId, model.slug));
+      const isFavorite =
+        model.instanceId === ("auto_orchestrator" as ProviderInstanceId) ||
+        favoritesSet.has(providerModelKey(model.instanceId, model.slug));
       if (isFavorite) addRow("favorites", true);
       if (model.isLegacy && !isFavorite) {
         tabsWithLegacyRow.add(model.instanceId);
@@ -669,28 +671,53 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
         ...(model.subProvider ? { subProvider: model.subProvider } : {}),
         driverKind: model.driverKind,
         providerDisplayName: model.instanceDisplayName,
-        isFavorite: favoritesSet.has(providerModelKey(model.instanceId, model.slug)),
+        isFavorite:
+          model.instanceId === ("auto_orchestrator" as ProviderInstanceId) ||
+          favoritesSet.has(providerModelKey(model.instanceId, model.slug)),
       }));
     }
 
     if (lockedProvider !== null) {
       result = result.filter((m) => matchesLockedProvider(m));
       if (selectedInstanceId === "favorites") {
-        result = result.filter((m) => favoritesSet.has(providerModelKey(m.instanceId, m.slug)));
+        result = result.filter(
+          (m) =>
+            m.instanceId === ("auto_orchestrator" as ProviderInstanceId) ||
+            favoritesSet.has(providerModelKey(m.instanceId, m.slug)),
+        );
       } else {
         result = result.filter((m) => m.instanceId === selectedInstanceId);
       }
     } else if (selectedInstanceId === "favorites") {
-      result = result.filter((m) => favoritesSet.has(providerModelKey(m.instanceId, m.slug)));
+      result = result.filter(
+        (m) =>
+          m.instanceId === ("auto_orchestrator" as ProviderInstanceId) ||
+          favoritesSet.has(providerModelKey(m.instanceId, m.slug)),
+      );
     } else {
       result = result.filter((m) => m.instanceId === selectedInstanceId);
     }
 
-    return sortProviderModelItems(result, {
+    const sorted = sortProviderModelItems(result, {
       favoriteModelKeys: favoritesSet,
       groupFavorites: selectedInstanceId !== "favorites",
-      instanceOrder: selectedInstanceId === "favorites" ? instanceOrder : [],
+      instanceOrder:
+        selectedInstanceId === "favorites"
+          ? ["auto_orchestrator" as ProviderInstanceId, ...instanceOrder]
+          : [],
     });
+
+    const autoIndex = sorted.findIndex(
+      (m) => m.instanceId === ("auto_orchestrator" as ProviderInstanceId),
+    );
+    if (autoIndex > 0) {
+      const autoItem = sorted[autoIndex];
+      if (autoItem) {
+        sorted.splice(autoIndex, 1);
+        sorted.unshift(autoItem);
+      }
+    }
+    return sorted;
   })();
 
   const legacySection = (() => {
@@ -1030,7 +1057,10 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                     providerAccentColor={model.instanceAccentColor}
                     acpRegistryAgentId={model.acpRegistryAgentId}
                     acpRegistryIconUrl={model.acpRegistryIconUrl}
-                    isFavorite={favoritesSet.has(providerModelKey(model.instanceId, model.slug))}
+                    isFavorite={
+                      model.instanceId === ("auto_orchestrator" as ProviderInstanceId) ||
+                      favoritesSet.has(providerModelKey(model.instanceId, model.slug))
+                    }
                     isSelected={
                       selectedModelKeys !== undefined
                         ? selectedModelKeySet.has(modelKey)

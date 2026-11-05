@@ -4,9 +4,11 @@ import {
   useComposerDraftModelState,
 } from "../../composerDraftStore";
 import {
+  AUTO_ORCHESTRATOR_INSTANCE_ID,
   type ModelSelection,
   type ProjectId,
   ProviderDriverKind,
+  type ProviderInstanceId,
   type ScopedThreadRef,
   type ServerProvider,
 } from "@t3tools/contracts";
@@ -61,10 +63,16 @@ export function useComposerProviderModel(
     lockedProvider,
     lockedInstanceId,
   });
-  const selectedInstanceId =
-    selection.selectedProviderEntry?.instanceId ?? NO_PROVIDER_MODEL_SELECTION.instanceId;
-  const selectedProvider: ProviderDriverKind =
-    selection.selectedProviderEntry?.driverKind ?? selection.requestedDriverKind;
+  const isAuto =
+    !lockedProvider &&
+    (draftModelState?.activeProvider === AUTO_ORCHESTRATOR_INSTANCE_ID ||
+      candidateInstanceIds[0] === AUTO_ORCHESTRATOR_INSTANCE_ID);
+  const selectedInstanceId = isAuto
+    ? (AUTO_ORCHESTRATOR_INSTANCE_ID as ProviderInstanceId)
+    : (selection.selectedProviderEntry?.instanceId ?? NO_PROVIDER_MODEL_SELECTION.instanceId);
+  const selectedProvider: ProviderDriverKind = isAuto
+    ? (AUTO_ORCHESTRATOR_INSTANCE_ID as ProviderDriverKind)
+    : (selection.selectedProviderEntry?.driverKind ?? selection.requestedDriverKind);
   const modelState = deriveEffectiveComposerModelState({
     draft: draftModelState,
     providers: providerStatuses,
@@ -74,7 +82,9 @@ export function useComposerProviderModel(
     projectModelSelection,
     settings,
   });
-  const selectedProviderModels = selection.selectedProviderEntry?.models ?? NO_PROVIDER_MODELS;
+  const selectedProviderModels = isAuto
+    ? [{ slug: "hybrid-router", name: "⚡ Auto (Multi-Tier Orchestrator)" }]
+    : (selection.selectedProviderEntry?.models ?? NO_PROVIDER_MODELS);
   const composerProviderState = getComposerProviderState({
     provider: selectedProvider,
     model: modelState.selectedModel,

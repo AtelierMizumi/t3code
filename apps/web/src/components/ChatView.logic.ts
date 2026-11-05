@@ -569,6 +569,7 @@ export function getAntigravitySendBlockReason(
     return "Sign in to Antigravity in provider settings before sending.";
   }
   const slug = model.trim();
+  if (slug === "hybrid-router" || slug === "auto") return null;
   if (slug.length === 0) return "Choose an Antigravity model before sending.";
   if (provider.auth.status === "unknown") return null;
   if (provider.models.length === 0) {

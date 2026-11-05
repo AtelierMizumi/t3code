@@ -1,5 +1,6 @@
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
+  AUTO_ORCHESTRATOR_INSTANCE_ID,
   type ProviderInstanceId,
   type EnvironmentId,
   type ProviderDriverKind,
@@ -102,24 +103,32 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     props.instanceEntries.find((entry) => entry.instanceId === props.activeInstanceId) ?? null;
 
   const activeInstanceId = props.activeInstanceId;
+  const isAuto =
+    activeInstanceId === AUTO_ORCHESTRATOR_INSTANCE_ID || props.model === "hybrid-router";
   const selectedInstanceOptions = props.modelOptionsByInstance.get(activeInstanceId) ?? [];
   const selectedModel =
     resolveModelPickerSelectedModel({
-      driverKind: activeEntry?.driverKind,
+      driverKind:
+        activeEntry?.driverKind ??
+        (isAuto ? ("auto_orchestrator" as ProviderDriverKind) : undefined),
       model: props.model,
       options: selectedInstanceOptions,
     }) ??
     (activeEntry?.driverKind === "opencode" || activeEntry?.driverKind === "antigravity"
       ? undefined
       : selectedInstanceOptions[0]);
-  const triggerTitle = selectedModel
-    ? getTriggerDisplayModelName(selectedModel, activeEntry?.driverKind)
-    : props.model === ANTIGRAVITY_DEFAULT_MODEL
-      ? "Choose model"
-      : props.model || "Choose model";
-  const triggerLabel = selectedModel
-    ? `${getDisplayModelName(selectedModel)}${selectedModel.isUnavailable ? " (Unavailable)" : ""}`
-    : triggerTitle;
+  const triggerTitle = isAuto
+    ? "⚡ Auto"
+    : selectedModel
+      ? getTriggerDisplayModelName(selectedModel, activeEntry?.driverKind)
+      : props.model === ANTIGRAVITY_DEFAULT_MODEL
+        ? "Choose model"
+        : props.model || "Choose model";
+  const triggerLabel = isAuto
+    ? "⚡ Auto (Multi-Tier Orchestrator)"
+    : selectedModel
+      ? `${getDisplayModelName(selectedModel)}${selectedModel.isUnavailable ? " (Unavailable)" : ""}`
+      : triggerTitle;
   const showInstanceBadge =
     activeEntry !== null && shouldShowInstanceBadge(activeEntry, props.instanceEntries);
 
@@ -232,15 +241,15 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                 </span>
               ) : null}
             </span>
-          ) : activeEntry && props.triggerLabel === undefined ? (
+          ) : (activeEntry || isAuto) && props.triggerLabel === undefined ? (
             // Narrow compacted composers hide the provider icon before truncating the name.
             <span data-chat-provider-model-picker-icon className="contents">
               <ProviderInstanceIcon
-                driverKind={activeEntry.driverKind}
-                displayName={activeEntry.displayName}
-                accentColor={activeEntry.accentColor}
-                acpRegistryAgentId={activeEntry.acpRegistryAgentId}
-                acpRegistryIconUrl={activeEntry.acpRegistryIconUrl}
+                driverKind={activeEntry?.driverKind ?? ("auto_orchestrator" as ProviderDriverKind)}
+                displayName={activeEntry?.displayName ?? "Auto Orchestrator"}
+                accentColor={activeEntry?.accentColor ?? "#F59E0B"}
+                acpRegistryAgentId={activeEntry?.acpRegistryAgentId}
+                acpRegistryIconUrl={activeEntry?.acpRegistryIconUrl}
                 showBadge={showInstanceBadge}
                 className="size-4"
                 iconClassName={cn("size-4", props.activeProviderIconClassName)}
